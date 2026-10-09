@@ -129,13 +129,13 @@ func (m *Manager) restoreTunnel(t *Tunnel) {
 	if prev == "" || t.Status != "up" {
 		return
 	}
-	// 上次换节点改完隧道就中断了，入站还指着旧节点。不接回来的话它会一直
-	// 显示成"未绑定出口"，流量悄悄走直连——用户看不出哪里不对。
+	// 上次换节点改完隧道就中断了，分流规则还指着旧节点。不接回来的话这些规则
+	// 会一直被跳过，流量悄悄走原路由——用户看不出哪里不对。
 	if err := m.rebind(prev, t); err != nil {
-		log.Printf("恢复时把入站接回出口 %d 失败: %v", t.Slot, err)
+		log.Printf("恢复时把分流规则接回出口 %d 失败: %v", t.Slot, err)
 		return
 	}
-	log.Printf("出口 %d 上次换节点没收尾，已把原来绑着 %s 的入站接到 %s",
+	log.Printf("出口 %d 上次换节点没收尾，已把原来指向 %s 的分流规则接到 %s",
 		t.Slot, prev, t.Node.HostName)
 	t.setPrevHost("")
 	if err := m.saveState(); err != nil {
