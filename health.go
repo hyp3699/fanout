@@ -65,9 +65,9 @@ func (m *Manager) tunnelHealthy(t *Tunnel) bool {
 // reconnect 就地把一条隧道换到别的节点上，保持槽位与端口不变，
 // 这样已经分发出去的客户端配置仍然可用。
 //
-// oldHost 必须是本次重连前那条隧道真正绑着的节点名。调用方若已经
+// oldHost 必须是本次重连前那条隧道真正用着的节点名。调用方若已经
 // 改过 t.Node（比如手动换节点），就要把改之前的名字传进来，
-// 否则 rebind 找不到旧绑定，入站会掉成孤儿。
+// 否则 rebind 找不到指向旧节点的分流规则，规则会指向一个不存在的出口。
 func (m *Manager) reconnect(t *Tunnel, oldHost string) {
 	t.Status = "starting"
 	t.Err = "正在换节点重连"
@@ -75,8 +75,8 @@ func (m *Manager) reconnect(t *Tunnel, oldHost string) {
 
 	// 动手之前先把"原来绑的是谁"落盘。
 	//
-	// 换节点是两步：连上新节点、再把入站改绑过来。两步之间崩溃或重启的话，
-	// 存盘的隧道已经是新节点、入站却还指着旧节点，那个入站就成了孤儿。
+	// 换节点是两步：连上新节点、再把分流规则改指过来。两步之间崩溃或重启的话，
+	// 存盘的隧道已经是新节点、规则却还指着旧节点，规则就失效了。
 	// 这条线索留在盘上，重启恢复时能照着把它接回来。
 	t.setPrevHost(oldHost)
 	if err := m.saveState(); err != nil {
@@ -90,26 +90,26 @@ func (m *Manager) reconnect(t *Tunnel, oldHost string) {
 	t.teardownNetns()
 
 	go func() {
-		// 通知延后到 rebind/resync 之后：那两步会把入站改绑到新节点，
-		// 提前重建配置会因为入站还指着旧节点名而丢掉路由规则
+		// 通知延后到 rebind/resync 之后：那两步会把规则改指到新节点，
+		// 提前重建配置会因为规则还指着旧节点名而把它们跳过
 		m.bringUpPersist(t, false, true)
 		if t.Status != "up" {
 			return
 		}
-		// 出站 tag 跟着节点名走，换了节点就要把原来指向它的入站重新绑过去，
-		// 否则面板里的路由会指向一个已经不存在的出站。
+		// 出站 tag 跟着节点名走，换了节点就要把原来指向它的规则改过去，
+		// 否则规则会指向一个已经不存在的出站。
 		if t.Node.HostName != oldHost {
 			if err := m.rebind(oldHost, t); err != nil {
-				log.Printf("重连后同步 3x-ui 绑定失败: %v", err)
+				log.Printf("重连后同步分流规则失败: %v", err)
 				return
 			}
 		} else if err := m.resync(t); err != nil {
-			// 节点名没变也要重写一次出站：出口 IP 可能变了，
-			// 而且上一轮换节点时留下的绑定需要重新指回来。
-			log.Printf("重连后重写 3x-ui 出站失败: %v", err)
+			// 节点名没变也要重写一次出站：隧道刚才不在 up 状态时
+			// 指向它的规则被跳过了，现在要写回来。
+			log.Printf("重连后重写 sing-box 出站失败: %v", err)
 			return
 		}
-		// 入站已经跟过来了，标记可以清了
+		// 规则已经跟过来了，标记可以清了
 		t.setPrevHost("")
 		if err := m.saveState(); err != nil {
 			log.Printf("保存状态失败: %v", err)
