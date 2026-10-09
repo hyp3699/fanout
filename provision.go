@@ -9,18 +9,19 @@ import (
 )
 
 // ProvisionRequest 是"给我 N 个某地区的出口"这个意图。
+//
+// 只开隧道（出口），不建任何入站：入站归配置目录里别的脚本管，
+// 想让哪些流量走新出口，到「分流规则」里建规则。
 type ProvisionRequest struct {
-	Region     string // 国家码，空表示不限
-	Count      int
-	TemplateID int // 3x-ui 入站模板；0 表示只开隧道不建入站
+	Region string // 国家码，空表示不限
+	Count  int
 	// EveryRegion 表示每个有节点的国家都来 Count 个，此时 Region 被忽略。
 	EveryRegion bool
 }
 
 // Provision 异步执行一次批量开出口，立刻返回作业句柄供界面轮询。
 //
-// 隧道并行拉起（每条都要等 openvpn 握手，串行会线性累加等待），
-// 面板侧的入站创建则统一放到最后串行做一次，因为每次改路由都要重启 Xray。
+// 隧道并行拉起（每条都要等 openvpn 握手，串行会线性累加等待）。
 func (m *Manager) Provision(req ProvisionRequest) (*Job, error) {
 	if req.Count < 1 {
 		return nil, fmt.Errorf("数量至少为 1")
@@ -36,12 +37,9 @@ func (m *Manager) Provision(req ProvisionRequest) (*Job, error) {
 		return nil, err
 	}
 
-	labels := make([]string, 0, len(picks)+1)
+	labels := make([]string, 0, len(picks))
 	for _, n := range picks {
 		labels = append(labels, regionLabel(n)+" 出口")
-	}
-	if req.TemplateID > 0 {
-		labels = append(labels, "创建节点链接")
 	}
 
 	title := ""
@@ -55,23 +53,20 @@ func (m *Manager) Provision(req ProvisionRequest) (*Job, error) {
 	}
 	job := m.jobs.New(title, labels)
 
-	go m.runProvision(job, picks, req.TemplateID)
+	go m.runProvision(job, picks)
 	return job, nil
 }
 
-func (m *Manager) runProvision(job *Job, picks []Node, templateID int) {
+func (m *Manager) runProvision(job *Job, picks []Node) {
 	defer job.Finish()
 
 	var wg sync.WaitGroup
-	started := make([]*Tunnel, len(picks))
-
 	for i, node := range picks {
 		t, err := m.Start(node)
 		if err != nil {
 			job.Set(i, "failed", err.Error())
 			continue
 		}
-		started[i] = t
 		job.Set(i, "running", "正在连接 "+node.HostName)
 
 		wg.Add(1)
@@ -86,36 +81,6 @@ func (m *Manager) runProvision(job *Job, picks []Node, templateID int) {
 		}(i, t)
 	}
 	wg.Wait()
-
-	if templateID <= 0 {
-		return
-	}
-
-	step := len(picks)
-	var hosts []string
-	for _, t := range started {
-		if t != nil && t.Status == "up" {
-			hosts = append(hosts, t.Node.HostName)
-		}
-	}
-	if len(hosts) == 0 {
-		job.Set(step, "failed", "没有连通的出口，跳过")
-		return
-	}
-
-	job.Set(step, "running", fmt.Sprintf("为 %d 个出口建入站", len(hosts)))
-	x, err := openPanel()
-	if err != nil {
-		job.Set(step, "failed", err.Error())
-		return
-	}
-	ports, err := x.CloneToTunnels(templateID, hosts, m.Tunnels())
-	invalidateInbounds()
-	if err != nil {
-		job.Set(step, "failed", firstLine(err.Error()))
-		return
-	}
-	job.Set(step, "ok", fmt.Sprintf("已创建 %d 个入站", len(ports)))
 }
 
 // waitUp 等一条隧道跑完 bringUp。bringUp 最多试 6 个候选节点，
