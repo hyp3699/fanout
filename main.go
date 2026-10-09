@@ -23,7 +23,9 @@ func main() {
 		maxSlots = flag.Int("max", 20, "最多同时运行的隧道数")
 		workDir  = flag.String("dir", "/var/lib/fanout", "工作目录")
 	)
-	panelMode := flag.String("panel", "", "节点链接后端: 留空按界面设置/自动探测, 3x-ui, native, xray-cf-lite")
+	sbBin := flag.String("singbox-bin", "/etc/sing-box/sing-box", "sing-box 可执行文件")
+	sbConf := flag.String("singbox-conf", "/etc/sing-box/conf", "sing-box 配置目录（sing-box run -C 加载的那个），fanout 只写其中的 fanout-*.json")
+	sbService := flag.String("singbox-service", "sing-box", "sing-box 的 systemd/OpenRC 服务名；存在时用它 reload，填 none 则由 fanout 自己托管进程")
 	publicIP := flag.String("ip", "", "母机公网 IPv4，用于分享链接/SOCKS5 地址；留空则自动探测")
 	showVersion := flag.Bool("version", false, "显示版本后退出")
 	flag.Parse()
@@ -72,11 +74,12 @@ func main() {
 		log.Fatal(err)
 	}
 
-	configurePanel(*workDir, *panelMode)
+	configureSingBox(*sbBin, *sbConf, *sbService)
+	configurePanel(*workDir)
 	if p, err := openPanel(); err != nil {
-		log.Printf("节点链接后端暂不可用（可在 Web 界面查看原因）: %v", err)
+		log.Printf("sing-box 后端暂不可用（可在 Web 界面查看原因）: %v", err)
 	} else {
-		log.Printf("节点链接后端: %s", p.Describe())
+		log.Printf("sing-box 后端: %s", p.Describe())
 	}
 
 	mgr := NewManager(*maxSlots, *workDir)
@@ -91,9 +94,6 @@ func main() {
 		log.Printf("恢复上次状态失败: %v", err)
 	} else if n > 0 {
 		log.Printf("正在恢复上次的 %d 条隧道", n)
-		// 3x-ui 模式重启不会自动重写面板出站，旧版本升上来时面板里的 socks
-		// 出站没有认证字段，端口一旦要认证就连不上，这里恢复后对账一次
-		go mgr.ReconcileOutbounds()
 	}
 
 	go mgr.WatchHealth()
@@ -123,23 +123,17 @@ func main() {
 	mux.HandleFunc("/api/jobs", apiJobs(mgr))
 	mux.HandleFunc("/api/jobs/dismiss", apiJobDismiss(mgr))
 	mux.HandleFunc("/api/exits", apiExits(mgr))
-	mux.HandleFunc("/api/xui", apiXUIStatus)
-	mux.HandleFunc("/api/xui/inbounds", apiXUIInbounds(mgr))
-	mux.HandleFunc("/api/xui/bind", apiXUIBind(mgr))
-	mux.HandleFunc("/api/xui/clone", apiXUIClone(mgr))
-	mux.HandleFunc("/api/xui/detail", apiXUIDetail)
-	mux.HandleFunc("/api/xui/links", apiXUILinks)
-	mux.HandleFunc("/api/xui/delete", apiXUIDelete(mgr))
-	mux.HandleFunc("/api/panel/inbound/new", apiInboundCreate(mgr))
-	mux.HandleFunc("/api/panel/inbound/update", apiInboundUpdate(mgr))
-	mux.HandleFunc("/api/panel/client/add", apiClientAdd(mgr))
-	mux.HandleFunc("/api/panel/client/del", apiClientDelete(mgr))
-	mux.HandleFunc("/api/panel/client/reset", apiClientReset(mgr))
-	mux.HandleFunc("/api/panel/mode", apiPanelMode(*workDir))
-	mux.HandleFunc("/api/sub", apiSub)
-	mux.HandleFunc("/api/sub/reset", apiSubReset)
-	// 订阅本体走免登录（见 auth.go 的放行），口令在 handleSub 里验
-	mux.HandleFunc("/sub", handleSub(mgr))
+	mux.HandleFunc("/api/backend", apiBackendStatus)
+	// 入站只读：fanout 不建、不改、不删入站，只列出配置目录里已有的
+	mux.HandleFunc("/api/inbounds", apiInbounds)
+	mux.HandleFunc("/api/inbounds/detail", apiInboundDetail)
+	mux.HandleFunc("/api/inbounds/links", apiInboundLinks)
+	// 分流规则
+	mux.HandleFunc("/api/rules", apiRules(mgr))
+	mux.HandleFunc("/api/rules/save", apiRuleSave(mgr))
+	mux.HandleFunc("/api/rules/delete", apiRuleDelete(mgr))
+	mux.HandleFunc("/api/rules/move", apiRuleMove(mgr))
+	mux.HandleFunc("/api/rules/enable", apiRuleEnable(mgr))
 
 	auth, created, err := NewAuth(*workDir)
 	if err != nil {
@@ -424,7 +418,7 @@ func apiUpdateApply(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "restarting": true, "latest": st.Latest})
 }
 
-// apiExits 返回主界面需要的一切：出口以及挂在它上面的入站。
+// apiExits 返回主界面需要的一切：出口、现有入站和分流规则。
 func apiExits(m *Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, m.ExitsOf())
@@ -432,6 +426,7 @@ func apiExits(m *Manager) http.HandlerFunc {
 }
 
 // apiProvision 接收"开 N 个某地区的出口"这个意图，返回作业 id 供轮询。
+// 只开出口，不建入站。
 func apiProvision(m *Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -440,15 +435,8 @@ func apiProvision(m *Manager) http.HandlerFunc {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "count 参数无效"})
 			return
 		}
-		tpl := 0
-		if s := q.Get("template"); s != "" {
-			if tpl, err = strconv.Atoi(s); err != nil {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "template 参数无效"})
-				return
-			}
-		}
 		job, err := m.Provision(ProvisionRequest{
-			Region: q.Get("region"), Count: count, TemplateID: tpl,
+			Region: q.Get("region"), Count: count,
 			EveryRegion: q.Get("every") == "1",
 		})
 		if err != nil {
@@ -472,8 +460,8 @@ func apiJobDismiss(m *Manager) http.HandlerFunc {
 	}
 }
 
-// apiXUIStatus 报告当前的节点链接后端：接管的 3x-ui，或 fanout 自己跑的 Xray。
-func apiXUIStatus(w http.ResponseWriter, r *http.Request) {
+// apiBackendStatus 报告 sing-box 后端的状态。
+func apiBackendStatus(w http.ResponseWriter, r *http.Request) {
 	p, err := openPanel()
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -482,154 +470,26 @@ func apiXUIStatus(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	// xray-cf-lite 模式下节点由 xray-cf-lite 管，fanout 只改路由，不提供新建入口。
-	_, isXCL := p.(*XCL)
-	resp := map[string]any{
+	writeJSON(w, http.StatusOK, map[string]any{
 		"available": true,
 		"kind":      p.Kind(),
 		"describe":  p.Describe(),
-		// 自建/3x-ui 能建入站；xray-cf-lite 只能改路由
-		"can_create": !isXCL,
-	}
-	if x, ok := p.(*XUI); ok {
-		resp["port"] = x.Port
-		resp["base_path"] = x.BasePath
-		resp["scheme"] = x.Scheme
-		resp["host"] = x.Host
-	}
-	writeJSON(w, http.StatusOK, resp)
+		"conf_dir":  singbox.ConfDir,
+	})
 }
 
-// apiPanelMode 读取/切换节点链接后端。
-// GET 返回当前模式与本机可选模式；POST {"mode":"..."} 运行时切换，空 mode = 恢复自动探测。
-func apiPanelMode(workDir string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
-			var in struct {
-				Mode string `json:"mode"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求格式错误"})
-				return
-			}
-			p, err := switchPanelMode(in.Mode)
-			if err != nil {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-				return
-			}
-			invalidateInbounds()
-			writeJSON(w, http.StatusOK, map[string]any{
-				"mode":     currentPanelMode(),
-				"kind":     p.Kind(),
-				"describe": p.Describe(),
-			})
-			return
-		}
-		resp := map[string]any{
-			"mode":  currentPanelMode(),
-			"modes": availablePanelModes(workDir),
-		}
-		if p, err := openPanel(); err == nil {
-			resp["kind"] = p.Kind()
-			resp["describe"] = p.Describe()
-		}
-		writeJSON(w, http.StatusOK, resp)
+// apiInbounds 列出配置目录里现有的入站（只读）。
+func apiInbounds(w http.ResponseWriter, r *http.Request) {
+	list, err := cachedInbounds()
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
 	}
+	writeJSON(w, http.StatusOK, list)
 }
 
-// apiXUIInbounds 列出面板里已有的入站及其绑定状态。
-func apiXUIInbounds(m *Manager) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		list, err := cachedInbounds(liveHosts(m))
-		if err != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-			return
-		}
-		writeJSON(w, http.StatusOK, list)
-	}
-}
-
-// liveHosts 返回当前有连通隧道的节点标识集合。
-func liveHosts(m *Manager) map[string]bool {
-	live := map[string]bool{}
-	for _, t := range m.Tunnels() {
-		if t.Status == "up" {
-			live[sanitizeTag(t.Node.HostName)] = true
-		}
-	}
-	return live
-}
-
-// apiXUIBind 把某个入站绑定到某条隧道，slot=0 表示解绑。
-func apiXUIBind(m *Manager) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		tag := r.URL.Query().Get("tag")
-		if tag == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "缺少 tag 参数"})
-			return
-		}
-		host := r.URL.Query().Get("host")
-		x, err := openPanel()
-		if err != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-			return
-		}
-		if err := x.Bind(tag, host, m.Tunnels()); err != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-			return
-		}
-		invalidateInbounds()
-		writeJSON(w, http.StatusOK, map[string]string{"ok": "已更新"})
-	}
-}
-
-// apiXUIClone 以某个入站为模板，为所有已连通的隧道各复制一个入站并绑好出口。
-func apiXUIClone(m *Manager) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := strconv.Atoi(r.URL.Query().Get("id"))
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id 参数无效"})
-			return
-		}
-
-		tunnels := m.Tunnels()
-		// 用节点主机名而非槽位号：槽位在重启后会重排，指代会错位
-		var hosts []string
-		if raw := r.URL.Query().Get("hosts"); raw != "" {
-			for _, part := range strings.Split(raw, ",") {
-				if h := strings.TrimSpace(part); h != "" {
-					hosts = append(hosts, h)
-				}
-			}
-		} else {
-			for _, t := range tunnels {
-				if t.Status == "up" {
-					hosts = append(hosts, t.Node.HostName)
-				}
-			}
-		}
-		if len(hosts) == 0 {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "没有可用的隧道"})
-			return
-		}
-
-		x, err := openPanel()
-		if err != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-			return
-		}
-		ports, err := x.CloneToTunnels(id, hosts, tunnels)
-		invalidateInbounds()
-		if err != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error(), "created": ports})
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"created": ports})
-	}
-}
-
-// apiXUIDetail 返回某个入站的详情，含客户端与可直接复制的分享链接。
-func apiXUIDetail(w http.ResponseWriter, r *http.Request) {
+// apiInboundDetail 返回某个入站的详情，含客户端与可直接复制的分享链接。
+func apiInboundDetail(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.Atoi(r.URL.Query().Get("id"))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id 参数无效"})
@@ -668,8 +528,8 @@ func publicHost(r *http.Request) string {
 	return host
 }
 
-// apiXUILinks 批量导出多个入站的分享链接。
-func apiXUILinks(w http.ResponseWriter, r *http.Request) {
+// apiInboundLinks 批量导出多个入站的分享链接。
+func apiInboundLinks(w http.ResponseWriter, r *http.Request) {
 	x, err := openPanel()
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
@@ -684,7 +544,7 @@ func apiXUILinks(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	} else {
-		list, err := x.Inbounds(nil)
+		list, err := x.Inbounds()
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 			return
@@ -710,87 +570,65 @@ func apiXUILinks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"links": links})
 }
 
-// apiXUIDelete 删除入站。停掉出口后它的入站会留下来，用户需要一个清理入口。
-func apiXUIDelete(m *Manager) http.HandlerFunc {
+// ---- 分流规则 ----
+
+func requirePost(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "用 POST"})
+		return false
+	}
+	return true
+}
+
+// apiRules 列出有序的分流规则，带出口状态与是否生效。
+func apiRules(m *Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var ids []int
-		for _, part := range strings.Split(r.URL.Query().Get("ids"), ",") {
-			if n, err := strconv.Atoi(strings.TrimSpace(part)); err == nil {
-				ids = append(ids, n)
-			}
-		}
-		if len(ids) == 0 {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "没有指定要删除的入站"})
+		v := m.ExitsOf()
+		if v.Panel != "" && v.Backend == "" {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": v.Panel})
 			return
 		}
-		x, err := openPanel()
-		if err != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-			return
-		}
-		err = x.DeleteInbounds(ids, m.Tunnels())
-		invalidateInbounds()
-		if err != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]int{"deleted": len(ids)})
+		writeJSON(w, http.StatusOK, v.Rules)
 	}
 }
 
-// apiInboundCreate 新建一个入站。两种后端都支持：自建模式写自己的库，
-// 接管 3x-ui 时走面板的 inbounds/add API。
-// apiInboundUpdate 改入站的端口、备注与启停。两种后端都支持。
-func apiInboundUpdate(m *Manager) http.HandlerFunc {
+// apiRuleSave 新建（id 为 0 或不传）或修改一条分流规则。请求体是 JSON：
+//
+//	{"id":0,"name":"奈飞","enabled":true,"inbounds":["anytls-1"],"exit":"<节点主机名>",
+//	 "domains":"netflix.com\nfull:www.example.com","rule_sets":[{"source":"geosite:netflix"}],
+//	 "local_rule_sets":["geosite-openai"],"all":false,"resolve_ip":false}
+//
+// exit（fanout 出口的节点主机名）和 outbound（配置目录里已有的出站 / 端点 tag，如 direct）二选一；
+// local_rule_sets 是配置目录里已有的 route.rule_set tag，直接引用。
+func apiRuleSave(m *Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !requirePost(w, r) {
+			return
+		}
+		var in RuleInput
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求格式错误: " + err.Error()})
+			return
+		}
 		p, err := openPanel()
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 			return
 		}
-		q := r.URL.Query()
-		id, err := strconv.Atoi(q.Get("id"))
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id 参数无效"})
-			return
-		}
-
-		// 只有真正传了的参数才改，没传的保持原样
-		var patch InboundPatch
-		if v := q.Get("port"); v != "" {
-			port, err := strconv.Atoi(v)
-			if err != nil {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "端口无效"})
-				return
-			}
-			patch.Port = &port
-		}
-		if q.Has("remark") {
-			remark := q.Get("remark")
-			patch.Remark = &remark
-		}
-		if v := q.Get("enable"); v != "" {
-			enable := v == "1"
-			patch.Enable = &enable
-		}
-
-		err = p.UpdateInbound(id, patch, m.Tunnels())
+		rule, err := p.SaveRule(in, m.Tunnels())
 		invalidateInbounds()
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"ok": "已保存"})
+		writeJSON(w, http.StatusOK, rule)
 	}
 }
 
-// clientAction 把三个客户端操作的公共部分收拢：解析 id/email 再调后端。
-func clientAction(m *Manager, what string,
-	do func(p Panel, id int, email string, tunnels []*Tunnel) error) http.HandlerFunc {
+// ruleAction 把删除 / 移动 / 启停的公共部分收拢：校验 POST、解析 id 再调后端。
+func ruleAction(m *Manager, what string, do func(p Panel, id int, r *http.Request, tunnels []*Tunnel) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		p, err := openPanel()
-		if err != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		if !requirePost(w, r) {
 			return
 		}
 		id, err := strconv.Atoi(r.URL.Query().Get("id"))
@@ -798,7 +636,12 @@ func clientAction(m *Manager, what string,
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id 参数无效"})
 			return
 		}
-		err = do(p, id, r.URL.Query().Get("email"), m.Tunnels())
+		p, err := openPanel()
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+			return
+		}
+		err = do(p, id, r, m.Tunnels())
 		invalidateInbounds()
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -808,65 +651,27 @@ func clientAction(m *Manager, what string,
 	}
 }
 
-func apiClientAdd(m *Manager) http.HandlerFunc {
-	return clientAction(m, "已添加", func(p Panel, id int, email string, t []*Tunnel) error {
-		return p.AddClient(id, email, t)
+func apiRuleDelete(m *Manager) http.HandlerFunc {
+	return ruleAction(m, "已删除", func(p Panel, id int, _ *http.Request, t []*Tunnel) error {
+		return p.DeleteRule(id, t)
 	})
 }
 
-func apiClientDelete(m *Manager) http.HandlerFunc {
-	return clientAction(m, "已删除", func(p Panel, id int, email string, t []*Tunnel) error {
-		return p.DeleteClient(id, email, t)
-	})
-}
-
-func apiClientReset(m *Manager) http.HandlerFunc {
-	return clientAction(m, "已重置", func(p Panel, id int, email string, t []*Tunnel) error {
-		return p.ResetClient(id, email, t)
-	})
-}
-
-func apiInboundCreate(m *Manager) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		p, err := openPanel()
-		if err != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-			return
+// apiRuleMove 上移（dir=up）或下移（dir=down）一位。规则按顺序匹配，先命中先生效。
+func apiRuleMove(m *Manager) http.HandlerFunc {
+	return ruleAction(m, "已移动", func(p Panel, id int, r *http.Request, t []*Tunnel) error {
+		switch r.URL.Query().Get("dir") {
+		case "up":
+			return p.MoveRule(id, -1, t)
+		case "down":
+			return p.MoveRule(id, 1, t)
 		}
+		return fmt.Errorf("dir 只能是 up 或 down")
+	})
+}
 
-		q := r.URL.Query()
-		port, _ := strconv.Atoi(q.Get("port"))
-		ib, err := p.CreateInbound(NewInboundSpec{
-			Protocol: q.Get("protocol"),
-			Network:  q.Get("network"),
-			Port:     port,
-			Remark:   q.Get("remark"),
-			Path:     q.Get("path"),
-			Host:     q.Get("host"),
-			Security: q.Get("security"),
-			Vision:   q.Get("vision") == "1",
-
-			ServerName: q.Get("sni"),
-			CertFile:   q.Get("cert"),
-			KeyFile:    q.Get("key"),
-
-			Dest:        q.Get("dest"),
-			ServerNames: q.Get("server_names"),
-			ShortID:     q.Get("sid"),
-			Fingerprint: q.Get("fp"),
-		}, m.Tunnels())
-		invalidateInbounds()
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"id":       ib.ID,
-			"port":     ib.Port,
-			"protocol": ib.Protocol,
-			"remark":   ib.Remark,
-			"network":  ib.Network,
-			"security": ib.Security,
-		})
-	}
+func apiRuleEnable(m *Manager) http.HandlerFunc {
+	return ruleAction(m, "已更新", func(p Panel, id int, r *http.Request, t []*Tunnel) error {
+		return p.EnableRule(id, r.URL.Query().Get("on") == "1", t)
+	})
 }
