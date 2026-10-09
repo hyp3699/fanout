@@ -1,100 +1,242 @@
 package main
 
 import (
+	"encoding/base64"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"strings"
 	"sync"
 )
 
-// Native 是 fanout 自己跑 Xray 的后端，用在本机没装 3x-ui 的场合。
+// Native 是 fanout 自己管理 sing-box 配置的后端。
 //
-// 入站数据存在 native.json，Xray 的运行配置每次改动后整份重新生成。
-// 全量重写比增量改省心：配置是纯函数产物，不会出现改了一半的中间态。
+// fanout 只写配置目录里的 fanout-outbounds.json 和 fanout-route.json：
+// 出站由隧道列表推出来，路由由用户建的分流规则推出来。入站一律是目录里已有的
+// （别的脚本建的，或老版本 fanout 留下的 fanout-in-*.json），只读。
+// 每次改动整份重写两个文件，配置是纯函数产物，不会出现改了一半的中间态。
 type Native struct {
-	mu    sync.Mutex
-	dir   string
-	store *nativeStore
-	proc  *xrayProc
+	mu      sync.Mutex
+	dir     string
+	store   *nativeStore
+	runner  *singboxRunner
+	adopted []*adoptedInbound
 }
 
 func openNative(workDir string) (*Native, error) {
 	if workDir == "" {
-		return nil, fmt.Errorf("自建模式缺少工作目录")
+		return nil, fmt.Errorf("缺少工作目录")
 	}
-	bin, err := findXray(workDir)
-	if err != nil {
-		return nil, err
+	if st, err := os.Stat(singbox.Bin); err != nil || st.IsDir() || st.Mode()&0111 == 0 {
+		return nil, fmt.Errorf("找不到 sing-box 可执行文件 %s（重新跑 install.sh，或用 -singbox-bin 指定）", singbox.Bin)
 	}
-	store, err := loadNativeStore(workDir)
+	if err := os.MkdirAll(singbox.ConfDir, 0755); err != nil {
+		return nil, fmt.Errorf("创建 sing-box 配置目录失败: %w", err)
+	}
+	store, migrated, err := loadNativeStore(workDir)
 	if err != nil {
 		return nil, err
 	}
 	n := &Native{
-		dir:   workDir,
-		store: store,
-		proc:  &xrayProc{bin: bin, dir: workDir},
+		dir:    workDir,
+		store:  store,
+		runner: newSingboxRunner(workDir),
 	}
-	// 上次进程被强杀时遗留的 Xray 还占着入站端口，先收掉
-	n.proc.reapOrphan()
+	// 上次进程被强杀时遗留的 sing-box 子进程还占着入站端口，先收掉
+	n.runner.reapOrphan()
+	warnShadowingRoutes(singbox.ConfDir)
+	n.refreshAdopted()
+	if migrated {
+		// 老版本的整条入站绑定还写在 fanout-route.json 里，立刻按新模型重写一次，
+		// 别让它在第一条隧道连上之前继续生效
+		if err := n.store.save(workDir); err != nil {
+			log.Printf("保存迁移后的状态失败: %v", err)
+		}
+		n.mu.Lock()
+		if err := n.apply(nil); err != nil {
+			log.Printf("迁移后重写 sing-box 配置失败: %v", err)
+		}
+		n.mu.Unlock()
+	}
 	return n, nil
 }
 
 func (n *Native) Kind() string { return "native" }
 
 func (n *Native) Describe() string {
-	return fmt.Sprintf("fanout 自建 Xray（%s）", n.proc.bin)
+	return "sing-box（" + n.runner.describe() + "）"
 }
 
-// apply 重新生成配置并重启 Xray，然后落盘。
+// refreshAdopted 重新扫描配置目录里的入站，并给新出现的分配界面 ID。
+// 调用方必须已持有 n.mu（openNative 里除外）。
+func (n *Native) refreshAdopted() {
+	list := scanAdopted(singbox.ConfDir)
+	added := false
+	if n.store.Adopted == nil {
+		n.store.Adopted = map[string]*adoptedState{}
+	}
+	for _, a := range list {
+		st := n.store.Adopted[a.Tag]
+		if st == nil {
+			st = &adoptedState{ID: n.store.NextID}
+			n.store.NextID++
+			n.store.Adopted[a.Tag] = st
+			added = true
+		}
+		a.ID = st.ID
+	}
+	n.adopted = list
+	// 新发现的入站立刻记下 ID，重启后界面上的编号不变
+	if added {
+		if err := n.store.save(n.dir); err != nil {
+			log.Printf("保存入站编号失败: %v", err)
+		}
+	}
+}
+
+func (n *Native) adoptedByID(id int) *adoptedInbound {
+	for _, a := range n.adopted {
+		if a.ID == id {
+			return a
+		}
+	}
+	return nil
+}
+
+// apply 重写 fanout 的两个配置文件，校验通过后让 sing-box 重载，然后落盘。
+// 校验不过、或重载后 sing-box 没起来，就把 fanout 的文件恢复成改之前的样子。
 // 调用方必须已持有 n.mu。
 func (n *Native) apply(tunnels []*Tunnel) error {
-	cfg := buildXrayConfig(n.store.sorted(), tunnels)
-	path, err := writeXrayConfig(n.dir, cfg)
+	n.refreshAdopted()
+	opts := buildOptions{
+		RuleSetDir:    ruleSetDir(),
+		LegacyRuleSet: n.runner.legacyRuleSet(),
+		Foreign:       scanForeign(singbox.ConfDir),
+	}
+	if opts.LegacyRuleSet {
+		opts.RuleSetDir = ""
+	}
+	built := buildFanoutFiles(n.store.Rules, n.adopted, tunnels, opts)
+	files, err := encodeFiles(built)
 	if err != nil {
 		return err
 	}
-	if err := verifyXrayConfig(n.proc.bin, path); err != nil {
+	snap, err := snapshotFanoutFiles(singbox.ConfDir)
+	if err != nil {
 		return err
 	}
-	// 没有入站时不必留着进程占资源
-	if len(cfg["inbounds"].([]any)) == 0 {
-		n.proc.stop()
+	unchanged := true
+	for name, blob := range files {
+		if string(snap[name]) != string(blob) {
+			unchanged = false
+		}
+	}
+	if err := writeFanoutFiles(singbox.ConfDir, files); err != nil {
+		_ = writeFanoutFiles(singbox.ConfDir, snap)
+		n.discardChanges()
+		return err
+	}
+	rollback := func() {
+		if rerr := writeFanoutFiles(singbox.ConfDir, snap); rerr != nil {
+			log.Printf("回滚 sing-box 配置失败: %v", rerr)
+		}
+		n.discardChanges()
+	}
+
+	// 自己托管进程时，目录里没有入站就不必留着进程占资源
+	want := n.needsRunning()
+	if n.runner.initSys != "" || want {
+		if err := n.runner.check(); err != nil {
+			rollback()
+			return err
+		}
+	}
+	// 服务模式下文件内容没变（比如隧道重连但端口凭据都没变）就不打扰 sing-box，
+	// 免得每次重载都断一下别的脚本的连接
+	if unchanged && n.runner.initSys != "" {
 		return n.store.save(n.dir)
 	}
-	if err := n.proc.restart(path); err != nil {
+	if err := n.runner.reload(want); err != nil {
+		rollback()
+		_ = n.runner.reload(want)
 		return err
 	}
-	return n.store.save(n.dir)
+	// 有远程规则集时多确认一次：check 不下载规则集，下载失败要到启动时才暴露
+	if routeHasRuleSets(built) && (n.runner.initSys != "" || want) {
+		if err := n.runner.verifyAlive(); err != nil {
+			rollback()
+			if rerr := n.runner.reload(want); rerr != nil {
+				log.Printf("回滚后重载 sing-box 失败: %v", rerr)
+			}
+			return fmt.Errorf("%v；已回滚 fanout 的配置", err)
+		}
+	}
+	if err := n.store.save(n.dir); err != nil {
+		return err
+	}
+	pruneRuleSetCache(ruleSetDir(), n.store.Rules)
+	return nil
 }
 
-// OnTunnelsChanged 在隧道集合变化后重建配置。自建模式下出站直接由隧道列表
-// 推导，所以隧道一变就要重新生成，否则新出口没有对应的 socks 出站。
+func routeHasRuleSets(built map[string]any) bool {
+	doc, _ := built[fanoutRouteFile].(map[string]any)
+	route, _ := doc["route"].(map[string]any)
+	sets, _ := route["rule_set"].([]any)
+	return len(sets) > 0
+}
+
+// discardChanges 丢掉内存里还没生效的改动，回到上次成功落盘的状态，
+// 免得配置文件回滚了而内存里还留着坏规则，下次 apply 又写回去。
+func (n *Native) discardChanges() {
+	if st, _, err := loadNativeStore(n.dir); err == nil {
+		n.store = st
+	}
+	n.refreshAdopted()
+}
+
+// needsRunning 判断托管模式下是否需要 sing-box 进程：配置目录里有入站就要。
+func (n *Native) needsRunning() bool {
+	return len(n.adopted) > 0
+}
+
+// OnTunnelsChanged 在隧道集合变化后重建配置。出站直接由隧道列表推导，
+// 隧道一变就要重新生成，否则新出口没有对应的 socks 出站。
 func (n *Native) OnTunnelsChanged(tunnels []*Tunnel) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return n.apply(tunnels)
 }
 
-// Close 停掉自己拉起的 Xray。
+// Close 停掉自己拉起的 sing-box 子进程；服务模式下不动服务。
 func (n *Native) Close() {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	n.proc.stop()
+	n.runner.stop()
 }
 
-func (n *Native) Inbounds(live map[string]bool) ([]Inbound, error) {
+// ruleCount 统计每个入站 tag 被几条规则引用。
+func (n *Native) ruleCount() map[string]int {
+	c := map[string]int{}
+	for _, r := range n.store.Rules {
+		for _, t := range r.Inbounds {
+			c[t]++
+		}
+	}
+	return c
+}
+
+func (n *Native) Inbounds() ([]Inbound, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	n.refreshAdopted()
 
-	list := n.store.sorted()
-	out := make([]Inbound, 0, len(list))
-	for _, ib := range list {
+	count := n.ruleCount()
+	out := make([]Inbound, 0, len(n.adopted))
+	for _, a := range n.adopted {
 		out = append(out, Inbound{
-			ID: ib.ID, Port: ib.Port, Protocol: ib.Protocol,
-			Remark: ib.Remark, Enable: ib.Enable, Tag: ib.tag(),
-			BoundTo: ib.BoundTo, BoundUp: live[ib.BoundTo],
+			ID: a.ID, Port: a.Port, Protocol: a.Type, Tag: a.Tag,
+			Source: a.File, Rules: count[a.Tag],
 		})
 	}
 	return out, nil
@@ -104,101 +246,204 @@ func (n *Native) InboundDetail(id int, publicHost string) (*InboundDetail, error
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	ib := n.store.byID(id)
-	if ib == nil {
-		return nil, fmt.Errorf("入站 %d 不存在", id)
+	a := n.adoptedByID(id)
+	if a == nil {
+		n.refreshAdopted()
+		if a = n.adoptedByID(id); a == nil {
+			return nil, fmt.Errorf("入站 %d 不存在", id)
+		}
 	}
 	detail := &InboundDetail{
 		Inbound: Inbound{
-			ID: ib.ID, Port: ib.Port, Protocol: ib.Protocol,
-			Remark: ib.Remark, Enable: ib.Enable, Tag: ib.tag(),
-			BoundTo: ib.BoundTo,
+			ID: a.ID, Port: a.Port, Protocol: a.Type, Tag: a.Tag,
+			Source: a.File, Rules: n.ruleCount()[a.Tag],
 		},
-		Listen:  "0.0.0.0",
-		Network: ib.netOrTCP(),
+		Listen:  str(a.Raw["listen"]),
+		Network: "tcp",
 		TLS:     "none",
 	}
-	for _, c := range ib.Clients {
-		id := c.ID
-		if ib.Protocol == "trojan" {
-			id = c.Password
+	if ib := a.toNative(); ib != nil {
+		detail.Network, detail.TLS = ib.netOrTCP(), ib.securityOrNone()
+		for _, c := range ib.Clients {
+			id := c.ID
+			if id == "" {
+				id = c.Password
+			}
+			detail.Clients = append(detail.Clients, ClientInfo{Email: c.Email, ID: id})
 		}
-		detail.Clients = append(detail.Clients, ClientInfo{Email: c.Email, ID: id, Enable: c.Enable})
-		detail.Links = append(detail.Links, shareLink(ib, c, publicHost))
 	}
+	detail.Links = n.adoptedLinks(a, publicHost)
 	return detail, nil
+}
+
+// adoptedLinks 给入站出分享链接：优先用脚本自己导出的，没有再自己推。
+func (n *Native) adoptedLinks(a *adoptedInbound, publicHost string) []string {
+	if links := scriptLinks(singbox.URLDir, a.Port); len(links) > 0 {
+		return links
+	}
+	ib := a.toNative()
+	if ib == nil {
+		return nil
+	}
+	var out []string
+	for _, c := range ib.Clients {
+		if l := shareLink(ib, c, publicHost); l != "" {
+			out = append(out, l)
+		}
+	}
+	return out
 }
 
 func (n *Native) InboundLinks(ids []int, publicHost string) ([]string, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	n.refreshAdopted()
 
 	var out []string
 	for _, id := range ids {
-		ib := n.store.byID(id)
-		if ib == nil {
-			continue
-		}
-		for _, c := range ib.Clients {
-			out = append(out, shareLink(ib, c, publicHost))
+		if a := n.adoptedByID(id); a != nil {
+			out = append(out, n.adoptedLinks(a, publicHost)...)
 		}
 	}
 	return out, nil
 }
 
-func (n *Native) Bind(inboundTag string, hostname string, tunnels []*Tunnel) error {
+// ---- 分流规则 ----
+
+func (n *Native) Rules() []RouteRule {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	out := make([]RouteRule, 0, len(n.store.Rules))
+	for _, r := range n.store.Rules {
+		out = append(out, cloneRule(r))
+	}
+	return out
+}
 
-	var target *Tunnel
-	if hostname != "" {
-		for _, t := range tunnels {
-			if t.Node.HostName == hostname {
-				target = t
-				break
-			}
+// Existing 列出配置目录里别的文件定义的、可以在规则里引用的出站 / 端点和规则集。
+func (n *Native) Existing() ([]ForeignOutbound, []ForeignRuleSet) {
+	fc := scanForeign(singbox.ConfDir)
+	sets := fc.RuleSets
+	if sets == nil {
+		sets = []ForeignRuleSet{}
+	}
+	return fc.Routable(), sets
+}
+
+func cloneRule(r *RouteRule) RouteRule {
+	c := *r
+	c.Inbounds = append([]string(nil), r.Inbounds...)
+	c.LocalRuleSets = append([]string(nil), r.LocalRuleSets...)
+	c.Domains = append([]string(nil), r.Domains...)
+	c.RuleSets = append([]RuleSetRef(nil), r.RuleSets...)
+	return c
+}
+
+// SaveRule 新建或修改一条规则。
+//
+// 规则集要先下载校验（可能要好几秒），这一步放在锁外做，不卡住别的操作。
+func (n *Native) SaveRule(in RuleInput, tunnels []*Tunnel) (*RouteRule, error) {
+	n.mu.Lock()
+	n.refreshAdopted()
+	fc := scanForeign(singbox.ConfDir)
+	env := ruleEnv{Inbounds: map[string]bool{}, Exits: map[string]bool{},
+		Outbounds: fc.outboundTags(), RuleSets: fc.ruleSetTags()}
+	for _, a := range n.adopted {
+		env.Inbounds[a.Tag] = true
+	}
+	var prev *RouteRule
+	if in.ID != 0 {
+		_, p := n.store.ruleByID(in.ID)
+		if p == nil {
+			n.mu.Unlock()
+			return nil, fmt.Errorf("规则 %d 不存在", in.ID)
 		}
-		if target == nil {
-			return fmt.Errorf("节点 %s 没有运行中的隧道", hostname)
-		}
-		if target.Status != "up" {
-			return fmt.Errorf("节点 %s 的隧道还没连通（当前 %s）", hostname, target.Status)
-		}
+		c := cloneRule(p)
+		prev = &c
+	}
+	n.mu.Unlock()
+
+	for _, t := range tunnels {
+		env.Exits[sanitizeTag(t.Node.HostName)] = true
+	}
+	rule, err := normalizeRule(in, env, prev)
+	if err != nil {
+		return nil, err
+	}
+	// 先下载校验一次：地址写错当场报出来；1.14+ 还拿它当 initial_path
+	if err := prefetchRuleSets(ruleSetDir(), rule.RuleSets); err != nil {
+		return nil, err
 	}
 
-	var found *nativeInbound
-	for _, ib := range n.store.Inbounds {
-		if ib.tag() == inboundTag {
-			found = ib
-			break
-		}
-	}
-	if found == nil {
-		return fmt.Errorf("入站 %s 不存在", inboundTag)
-	}
-
-	if target == nil {
-		found.BoundTo = ""
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if rule.ID == 0 {
+		rule.ID = n.store.NextRuleID
+		n.store.NextRuleID++
+		n.store.Rules = append(n.store.Rules, rule)
 	} else {
-		found.BoundTo = sanitizeTag(target.Node.HostName)
+		i, _ := n.store.ruleByID(rule.ID)
+		if i < 0 {
+			return nil, fmt.Errorf("规则 %d 不存在", rule.ID)
+		}
+		n.store.Rules[i] = rule
 	}
+	if err := n.apply(tunnels); err != nil {
+		return nil, err
+	}
+	c := cloneRule(rule)
+	return &c, nil
+}
+
+func (n *Native) DeleteRule(id int, tunnels []*Tunnel) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	i, _ := n.store.ruleByID(id)
+	if i < 0 {
+		return fmt.Errorf("规则 %d 不存在", id)
+	}
+	n.store.Rules = append(n.store.Rules[:i:i], n.store.Rules[i+1:]...)
 	return n.apply(tunnels)
 }
 
+func (n *Native) MoveRule(id int, delta int, tunnels []*Tunnel) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	i, _ := n.store.ruleByID(id)
+	if i < 0 {
+		return fmt.Errorf("规则 %d 不存在", id)
+	}
+	j := i + delta
+	if j < 0 || j >= len(n.store.Rules) || delta == 0 {
+		return nil
+	}
+	n.store.Rules[i], n.store.Rules[j] = n.store.Rules[j], n.store.Rules[i]
+	return n.apply(tunnels)
+}
+
+func (n *Native) EnableRule(id int, on bool, tunnels []*Tunnel) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	_, r := n.store.ruleByID(id)
+	if r == nil {
+		return fmt.Errorf("规则 %d 不存在", id)
+	}
+	r.Enabled = on
+	return n.apply(tunnels)
+}
+
+// Rebind 在出口换了节点之后，把指向旧节点的规则改指新节点。
+// 出站 tag 跟着节点名走，不改的话规则会指向一个已经不存在的出口而被跳过。
 func (n *Native) Rebind(oldHost string, target *Tunnel, tunnels []*Tunnel) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
 	oldTag := sanitizeTag(oldHost)
 	newTag := sanitizeTag(target.Node.HostName)
-	newLabel := exitLabel(target)
-	for _, ib := range n.store.Inbounds {
-		if ib.BoundTo != oldTag {
-			continue
+	for _, r := range n.store.Rules {
+		if r.Exit == oldTag {
+			r.Exit = newTag
 		}
-		ib.BoundTo = newTag
-		// 备注里带着旧出口的地区和 IP 尾段，换了节点要跟着改
-		ib.Remark = renameExitLabel(ib.Remark, newLabel)
 	}
 	return n.apply(tunnels)
 }
@@ -209,322 +454,73 @@ func (n *Native) ResyncOutbound(t *Tunnel, tunnels []*Tunnel) error {
 	return n.apply(tunnels)
 }
 
-// CloneToTunnels 以某个入站为模板，为每条指定隧道复制一个入站并绑好出口。
-//
-// 客户端凭据整套沿用模板：同一个 UUID 能走所有出口，用户只改端口。
-func (n *Native) CloneToTunnels(templateID int, hosts []string, tunnels []*Tunnel) ([]int, error) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	tpl := n.store.byID(templateID)
-	if tpl == nil {
-		return nil, fmt.Errorf("模板入站 %d 不存在", templateID)
-	}
-
-	byHost := map[string]*Tunnel{}
-	for _, t := range tunnels {
-		byHost[t.Node.HostName] = t
-	}
-
-	used := n.store.usedPorts()
-	// 别名撞了客户端会丢节点，先把已有备注收进来避让
-	takenRemarks := map[string]bool{}
-	for _, ib := range n.store.Inbounds {
-		takenRemarks[strings.TrimSpace(ib.Remark)] = true
-	}
-	created := []int{}
-	for _, host := range hosts {
-		t := byHost[host]
-		if t == nil || t.Status != "up" {
-			continue
-		}
-		port, err := freeRandomPort(used)
-		if err != nil {
-			return created, err
-		}
-		used[port] = true
-
-		remark := uniqueRemark(exitLabel(t), takenRemarks)
-		takenRemarks[remark] = true
-
-		clone := &nativeInbound{
-			ID:       n.store.NextID,
-			Port:     port,
-			Protocol: tpl.Protocol,
-			Network:  tpl.Network,
-			Path:     tpl.Path,
-			Host:     tpl.Host,
-			// 安全层必须跟着复制：漏掉的话从 REALITY/TLS 模板复制出来的
-			// 入站会变成明文，而分享链接照样标着模板的协议，很难发现
-			Security: tpl.Security,
-			TLS:      tpl.TLS,
-			Reality:  tpl.Reality,
-			Remark:   remark,
-			Enable:   true,
-			Clients:  append([]nativeClient(nil), tpl.Clients...),
-			BoundTo:  sanitizeTag(t.Node.HostName),
-		}
-		n.store.NextID++
-		n.store.Inbounds = append(n.store.Inbounds, clone)
-		created = append(created, port)
-	}
-
-	if len(created) == 0 {
-		return created, fmt.Errorf("没有可用的隧道")
-	}
-	if err := n.apply(tunnels); err != nil {
-		return created, err
-	}
-	return created, nil
-}
-
-func (n *Native) DeleteInbounds(ids []int, tunnels []*Tunnel) error {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	drop := map[int]bool{}
-	for _, id := range ids {
-		drop[id] = true
-	}
-	kept := make([]*nativeInbound, 0, len(n.store.Inbounds))
-	for _, ib := range n.store.Inbounds {
-		if !drop[ib.ID] {
-			kept = append(kept, ib)
-		}
-	}
-	n.store.Inbounds = kept
-	return n.apply(tunnels)
-}
-
-// UpdateInbound 改端口、备注与启停。
-//
-// 端口变了 inboundTag 也跟着变（tag 里含端口），所以路由规则要一起重写；
-// apply 是整份重建，天然覆盖了这点。
-func (n *Native) UpdateInbound(id int, patch InboundPatch, tunnels []*Tunnel) error {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	ib := n.store.byID(id)
-	if ib == nil {
-		return fmt.Errorf("入站 %d 不存在", id)
-	}
-
-	if patch.Port != nil && *patch.Port != ib.Port {
-		port := *patch.Port
-		if port < 1 || port > 65535 {
-			return fmt.Errorf("端口 %d 不在合法范围", port)
-		}
-		for _, other := range n.store.Inbounds {
-			if other.ID != id && other.Port == port {
-				return fmt.Errorf("端口 %d 已被入站 %q 占用", port, other.Remark)
-			}
-		}
-		ib.Port = port
-	}
-	if patch.Remark != nil {
-		if r := strings.TrimSpace(*patch.Remark); r != "" {
-			ib.Remark = r
-		}
-	}
-	if patch.Enable != nil {
-		ib.Enable = *patch.Enable
-	}
-	return n.apply(tunnels)
-}
-
-// AddClient 给入站加一个客户端。同一入站上可以有多套凭据，便于分发给不同人。
-func (n *Native) AddClient(id int, email string, tunnels []*Tunnel) error {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	ib := n.store.byID(id)
-	if ib == nil {
-		return fmt.Errorf("入站 %d 不存在", id)
-	}
-
-	email = strings.TrimSpace(email)
-	if email == "" {
-		email = fmt.Sprintf("%s-%d-%s", ib.Protocol, ib.Port, randomHex(3))
-	}
-	for _, c := range ib.Clients {
-		if c.Email == email {
-			return fmt.Errorf("客户端 %q 已存在", email)
-		}
-	}
-
-	ib.Clients = append(ib.Clients, nativeClient{
-		Email:    email,
-		ID:       newUUID(),
-		Password: randomHex(8),
-		Enable:   true,
-		Flow:     visionFlow(ib),
-	})
-	return n.apply(tunnels)
-}
-
-// DeleteClient 摘掉一个客户端。留下最后一个是有意的：
-// 没有任何客户端的入站在 Xray 里虽然合法，但谁也连不上，只会让人以为坏了。
-func (n *Native) DeleteClient(id int, email string, tunnels []*Tunnel) error {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	ib := n.store.byID(id)
-	if ib == nil {
-		return fmt.Errorf("入站 %d 不存在", id)
-	}
-	if len(ib.Clients) <= 1 {
-		return fmt.Errorf("这是最后一个客户端，删掉就没人能连了")
-	}
-
-	kept := make([]nativeClient, 0, len(ib.Clients))
-	for _, c := range ib.Clients {
-		if c.Email != email {
-			kept = append(kept, c)
-		}
-	}
-	if len(kept) == len(ib.Clients) {
-		return fmt.Errorf("客户端 %q 不存在", email)
-	}
-	ib.Clients = kept
-	return n.apply(tunnels)
-}
-
-// ResetClient 换一套新凭据，旧链接立即失效。
-func (n *Native) ResetClient(id int, email string, tunnels []*Tunnel) error {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	ib := n.store.byID(id)
-	if ib == nil {
-		return fmt.Errorf("入站 %d 不存在", id)
-	}
-	for i := range ib.Clients {
-		if ib.Clients[i].Email == email {
-			ib.Clients[i].ID = newUUID()
-			ib.Clients[i].Password = randomHex(8)
-			return n.apply(tunnels)
-		}
-	}
-	return fmt.Errorf("客户端 %q 不存在", email)
-}
-
-// visionFlow 沿用入站已有客户端的 flow，让新加的客户端与其余保持一致。
-func visionFlow(ib *nativeInbound) string {
-	for _, c := range ib.Clients {
-		if c.Flow != "" {
-			return c.Flow
-		}
-	}
-	return ""
-}
-
-// NewInboundSpec 是自建模式下新建入站的参数。
-//
-// 留空的字段都有合理默认：端口随机、备注按协议加端口自动生成、
-// 路径随机、REALITY 的密钥与 shortId 自动生成。
-type NewInboundSpec struct {
-	Protocol string
-	Network  string
-	Port     int
-	Remark   string
-	Path     string
-	Host     string
-	Security string
-	// Vision 请求给 VLESS 客户端启用 xtls-rprx-vision
-	Vision bool
-
-	// TLS：留空 CertFile 就生成自签证书
-	ServerName string
-	CertFile   string
-	KeyFile    string
-
-	// REALITY
-	Dest        string
-	ServerNames string // 逗号分隔，留空则从 Dest 推出来
-	ShortID     string
-	Fingerprint string
-}
-
-// nativeProtocols 是自建模式支持的协议，与前端下拉保持一致。
-var nativeProtocols = map[string]bool{"vless": true, "vmess": true, "trojan": true}
-
-// CreateInbound 新建一个入站，端口留空时随机分配。
-func (n *Native) CreateInbound(spec NewInboundSpec, tunnels []*Tunnel) (*CreatedInbound, error) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	ns, err := normalizeInboundSpec(spec, n.store.usedPorts())
-	if err != nil {
-		return nil, err
-	}
-	proto, network, security, port := ns.Protocol, ns.Network, ns.Security, ns.Port
-
-	ib := &nativeInbound{
-		ID:       n.store.NextID,
-		Port:     port,
-		Protocol: proto,
-		Network:  network,
-		Path:     ns.Path,
-		Host:     ns.Host,
-		Security: security,
-		Remark:   ns.Remark,
-		Enable:   true,
-	}
-
-	switch security {
-	case "tls":
-		conf, err := buildTLS(n.dir, spec)
-		if err != nil {
-			return nil, err
-		}
-		ib.TLS = conf
-	case "reality":
-		conf, err := buildReality(n.proc.bin, spec)
-		if err != nil {
-			return nil, err
-		}
-		ib.Reality = conf
-	}
-
-	ib.Clients = []nativeClient{{
-		Email:    fmt.Sprintf("%s-%d", proto, port),
-		ID:       newUUID(),
-		Password: randomHex(8),
-		Flow:     ns.Flow,
-		Enable:   true,
-	}}
-
-	n.store.NextID++
-	n.store.Inbounds = append(n.store.Inbounds, ib)
-
-	if err := n.apply(tunnels); err != nil {
-		// 起不来就别把坏入站留在库里
-		n.store.Inbounds = n.store.Inbounds[:len(n.store.Inbounds)-1]
-		n.store.NextID--
-		_ = n.apply(tunnels)
-		return nil, err
-	}
-	return &CreatedInbound{
-		ID:       ib.ID,
-		Port:     ib.Port,
-		Protocol: ib.Protocol,
-		Remark:   ib.Remark,
-		Network:  ib.netOrTCP(),
-		Security: ib.securityOrNone(),
-	}, nil
-}
-
-// shareLink 生成客户端可直接导入的分享链接。
+// shareLink 生成客户端可直接导入的分享链接。协议不支持时返回空串。
 func shareLink(ib *nativeInbound, c nativeClient, host string) string {
 	net := ib.netOrTCP()
 	sec := ib.securityOrNone()
+	frag := url.PathEscape(ib.Remark)
+	hostPort := fmt.Sprintf("%s:%d", bracketIPv6(host), ib.Port)
+
+	// TLS 公共参数：SNI，自签证书再带上跳过验证与证书指纹
+	tlsQuery := func(q url.Values) {
+		if ib.TLS == nil {
+			return
+		}
+		if ib.TLS.ServerName != "" {
+			q.Set("sni", ib.TLS.ServerName)
+		}
+		if ib.TLS.SelfSigned {
+			q.Set("insecure", "1")
+			q.Set("allowInsecure", "1")
+			if ib.TLS.CertSha256 != "" {
+				q.Set("pinSHA256", ib.TLS.CertSha256)
+			}
+		}
+	}
+
+	switch ib.Protocol {
+	case "anytls":
+		q := url.Values{}
+		tlsQuery(q)
+		return fmt.Sprintf("anytls://%s@%s?%s#%s", url.PathEscape(c.Password), hostPort, q.Encode(), frag)
+	case "hysteria2":
+		q := url.Values{}
+		tlsQuery(q)
+		return fmt.Sprintf("hysteria2://%s@%s?%s#%s", url.PathEscape(c.Password), hostPort, q.Encode(), frag)
+	case "tuic":
+		q := url.Values{}
+		tlsQuery(q)
+		if q.Get("insecure") == "1" {
+			q.Set("allow_insecure", "1")
+		}
+		q.Set("alpn", "h3")
+		q.Set("congestion_control", "bbr")
+		q.Set("udp_relay_mode", "native")
+		return fmt.Sprintf("tuic://%s:%s@%s?%s#%s", c.ID, url.PathEscape(c.Password), hostPort, q.Encode(), frag)
+	case "shadowsocks":
+		pass := c.Password
+		if ib.ServerPassword != "" {
+			pass = ib.ServerPassword + ":" + pass
+		}
+		// SIP002：2022 系列不允许 base64，按 URL 转义写明文
+		var user string
+		if strings.HasPrefix(ib.Method, "2022-") {
+			user = url.PathEscape(ib.Method) + ":" + url.PathEscape(pass)
+		} else {
+			user = base64.RawURLEncoding.EncodeToString([]byte(ib.Method + ":" + pass))
+		}
+		return fmt.Sprintf("ss://%s@%s#%s", user, hostPort, frag)
+	case "vless", "vmess", "trojan":
+	default:
+		return ""
+	}
 
 	q := url.Values{}
 	q.Set("type", net)
 	q.Set("security", sec)
 
 	switch net {
-	case "ws", "httpupgrade", "xhttp":
+	case "ws", "httpupgrade":
 		q.Set("path", ib.Path)
 		if ib.Host != "" {
 			q.Set("host", ib.Host)
@@ -535,23 +531,12 @@ func shareLink(ib *nativeInbound, c nativeClient, host string) string {
 
 	switch sec {
 	case "tls":
-		if ib.TLS != nil {
-			if ib.TLS.ServerName != "" {
-				q.Set("sni", ib.TLS.ServerName)
-			}
-			// 自签证书验不过 CA。Xray 26.x 移除了 allowInsecure，
-			// 改用证书指纹让客户端固定信任这一张。
-			if ib.TLS.SelfSigned && ib.TLS.CertSha256 != "" {
-				q.Set("pinSHA256", ib.TLS.CertSha256)
-			}
-		}
+		tlsQuery(q)
 	case "reality":
 		if ib.Reality != nil {
 			if len(ib.Reality.ServerNames) > 0 {
 				q.Set("sni", ib.Reality.ServerNames[0])
 			}
-			// pbk 是分享链接的通用写法，各家客户端都认；
-			// 注意 Xray 26.x 自己的配置文件里这个字段叫 password 而不是 publicKey
 			q.Set("pbk", ib.Reality.PublicKey)
 			if len(ib.Reality.ShortIDs) > 0 {
 				q.Set("sid", ib.Reality.ShortIDs[0])
@@ -566,107 +551,23 @@ func shareLink(ib *nativeInbound, c nativeClient, host string) string {
 		q.Set("flow", c.Flow)
 	}
 
-	frag := url.PathEscape(ib.Remark)
-
 	switch ib.Protocol {
 	case "trojan":
-		return fmt.Sprintf("trojan://%s@%s:%d?%s#%s", c.Password, host, ib.Port, q.Encode(), frag)
+		return fmt.Sprintf("trojan://%s@%s?%s#%s", url.PathEscape(c.Password), hostPort, q.Encode(), frag)
 	case "vmess":
 		// vmess 的 base64 形式各家客户端解析不一，用通用的 URI 形式
 		q.Set("encryption", "auto")
-		return fmt.Sprintf("vmess://%s@%s:%d?%s#%s", c.ID, host, ib.Port, q.Encode(), frag)
+		return fmt.Sprintf("vmess://%s@%s?%s#%s", c.ID, hostPort, q.Encode(), frag)
 	default:
 		q.Set("encryption", "none")
-		return fmt.Sprintf("vless://%s@%s:%d?%s#%s", c.ID, host, ib.Port, q.Encode(), frag)
+		return fmt.Sprintf("vless://%s@%s?%s#%s", c.ID, hostPort, q.Encode(), frag)
 	}
 }
 
-// buildTLS 组装 TLS 配置。没给证书路径就生成一张自签的，落在 dir/certs 下。
-func buildTLS(dir string, spec NewInboundSpec) (*tlsConfig, error) {
-	name := strings.TrimSpace(spec.ServerName)
-	if name == "" {
-		name = "localhost"
+// bracketIPv6 给 IPv6 地址加方括号，URL 里才能和端口分开。
+func bracketIPv6(h string) string {
+	if strings.Contains(h, ":") && !strings.HasPrefix(h, "[") {
+		return "[" + h + "]"
 	}
-	conf := &tlsConfig{ServerName: name}
-
-	cert, key := strings.TrimSpace(spec.CertFile), strings.TrimSpace(spec.KeyFile)
-	// 只填一个多半是漏填，静默退回自签会让用户以为用上了自己的证书
-	if (cert == "") != (key == "") {
-		return nil, fmt.Errorf("证书和私钥要成对填写，或者都留空用自签证书")
-	}
-	if cert != "" && key != "" {
-		if _, err := os.Stat(cert); err != nil {
-			return nil, fmt.Errorf("证书文件不可读: %w", err)
-		}
-		if _, err := os.Stat(key); err != nil {
-			return nil, fmt.Errorf("私钥文件不可读: %w", err)
-		}
-		conf.CertFile, conf.KeyFile = cert, key
-		return conf, nil
-	}
-
-	// 自签证书验不过 CA，靠链接里的证书指纹让客户端固定信任
-	c, k, err := selfSignedCert(dir, name)
-	if err != nil {
-		return nil, err
-	}
-	conf.CertFile, conf.KeyFile, conf.SelfSigned = c, k, true
-	// 指纹是自签证书唯一能让客户端验过的凭据，算不出来就没法生成可用链接
-	fp, err := certFingerprint(c)
-	if err != nil {
-		return nil, err
-	}
-	conf.CertSha256 = fp
-	return conf, nil
-}
-
-// buildReality 组装 REALITY 配置，密钥和 shortId 都自动生成。
-// xrayBin 用来跑 `xray x25519` 生成密钥对。
-func buildReality(xrayBin string, spec NewInboundSpec) (*realityConfig, error) {
-	dest := strings.TrimSpace(spec.Dest)
-	if dest == "" {
-		// REALITY 要跟 dest 完成一次真实 TLS1.3 握手，dest 不稳会让所有连接
-		// 静默回落。microsoft.com 在部分机房握手经常走不完，这里选更可靠的。
-		dest = "www.tesla.com:443"
-	}
-	if !strings.Contains(dest, ":") {
-		dest += ":443"
-	}
-
-	var names []string
-	for _, s := range strings.Split(spec.ServerNames, ",") {
-		if s = strings.TrimSpace(s); s != "" {
-			names = append(names, s)
-		}
-	}
-	if len(names) == 0 {
-		// 默认用 dest 的主机名：REALITY 要求 SNI 与被借用的站点一致
-		names = []string{strings.SplitN(dest, ":", 2)[0]}
-	}
-
-	priv, pub, err := realityKeys(xrayBin)
-	if err != nil {
-		return nil, err
-	}
-	if err := checkRealityDest(dest, names[0]); err != nil {
-		return nil, fmt.Errorf("REALITY 目标站点不可用，换一个 dest: %w", err)
-	}
-
-	short := strings.TrimSpace(spec.ShortID)
-	if short == "" {
-		short = randomShortID()
-	}
-	fp := strings.TrimSpace(spec.Fingerprint)
-	if fp == "" {
-		fp = "chrome"
-	}
-
-	return &realityConfig{
-		Dest:        dest,
-		ServerNames: names,
-		PrivateKey:  priv,
-		PublicKey:   pub,
-		ShortIDs:    []string{short},
-		Fingerprint: fp,
-	}, nil
+	return h
 }
