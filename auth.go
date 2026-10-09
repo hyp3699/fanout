@@ -147,12 +147,6 @@ func (a *Auth) Wrap(next http.Handler) http.Handler {
 			a.handleLogin(w, r)
 			return
 		}
-		// 订阅得让客户端直接拉，带不了登录态，所以这条路放行。
-		// 它不是无门槛：handleSub 自己校验一串独立口令，且仍在访问路径之后。
-		if r.URL.Path == "/sub" {
-			next.ServeHTTP(w, r)
-			return
-		}
 		if c, err := r.Cookie(sessionCookie); err == nil && a.valid(c.Value) {
 			next.ServeHTTP(w, r)
 			return
@@ -287,7 +281,7 @@ button{width:100%;margin-top:14px;background:#4a9eda;border:0;color:#0b0e12;
   <a href="https://t.me/+ft-zI76oovgwNmRh" target="_blank" rel="noopener">交流群</a>
   <a href="https://youtube.com/@joeyblog" target="_blank" rel="noopener">油管</a>
   <a href="https://joeyblog.net" target="_blank" rel="noopener">博客</a>
-  <a href="https://github.com/byJoey/fanout" target="_blank" rel="noopener">GitHub</a>
+  <a href="https://github.com/hyp3699/fanout" target="_blank" rel="noopener">GitHub</a>
 </div>
 <script>
 document.getElementById('f').onsubmit = async e => {
