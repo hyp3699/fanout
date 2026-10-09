@@ -178,11 +178,34 @@ label.chk input{margin:0}
   white-space:nowrap;max-width:280px}
 .client .share{margin:8px 0 0}
 .share button{margin-top:8px}
+.dim{color:var(--dim)}
+.dot.off{background:var(--line)}
+.empty.small{padding:18px 16px}
+.chip.static{cursor:default}
+.chip.static:hover{border-color:var(--line);color:var(--dim)}
+.chip.miss{border-color:rgba(194,84,80,.5);color:var(--bad);text-decoration:line-through}
+.rule{display:flex;align-items:center;gap:10px;flex-wrap:wrap;border:1px solid var(--line);
+  border-radius:6px;background:var(--panel);padding:8px 12px;margin-bottom:6px}
+.rule.off{opacity:.55}
+.rule .rno{color:var(--dim);font-size:11px;min-width:18px;text-align:right}
+.rule .rname{font-weight:600}
+.rule .rcond{color:var(--dim);font-size:12px;flex:1;min-width:160px;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.rule .rexit{font-size:12px;white-space:nowrap}
+.rule .rexit.bad{color:var(--bad)}
+.barhint{color:var(--dim);font-size:11px;margin:-6px 0 10px}
+div.f{margin-bottom:16px}
+.f>.lbl{display:block;color:var(--dim);font-size:11px;margin-bottom:6px}
+.inchk{display:flex;flex-wrap:wrap;gap:6px 16px}
+.rsrow{display:flex;gap:8px;align-items:center;margin-bottom:6px}
+.rsrow input{flex:1}
+.rsrow select{width:96px}
 textarea{width:100%;min-height:300px;background:#0e1116;border:1px solid var(--line);
   color:var(--text);border-radius:4px;
   font:12px/1.8 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   padding:10px 12px;resize:vertical}
 textarea:focus{outline:none;border-color:var(--accent)}
+textarea.dom{min-height:120px}
 .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);
   background:var(--panel);border:1px solid var(--line);border-radius:4px;
   padding:8px 14px;font-size:12px;z-index:80;opacity:0;pointer-events:none;
@@ -203,7 +226,7 @@ textarea:focus{outline:none;border-color:var(--accent)}
     <a href="https://t.me/+ft-zI76oovgwNmRh" target="_blank" rel="noopener">交流群</a>
     <a href="https://youtube.com/@joeyblog" target="_blank" rel="noopener">油管</a>
     <a href="https://joeyblog.net" target="_blank" rel="noopener">博客</a>
-    <a href="https://github.com/byJoey/fanout" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://github.com/hyp3699/fanout" target="_blank" rel="noopener">GitHub</a>
   </nav>
 </header>
 
@@ -214,21 +237,13 @@ textarea:focus{outline:none;border-color:var(--accent)}
     <h2>出口</h2>
     <span class="count" id="ecount"></span>
     <span class="spacer"></span>
-    <button id="subBtn" title="拿订阅地址">
-      <svg viewBox="0 0 24 24"><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/></svg>
-      订阅
-    </button>
-    <button id="exportAll" title="导出全部节点链接">
+    <button id="exportAll" title="导出全部入站的分享链接">
       <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
       导出链接
     </button>
     <button id="stopall" title="停止所有出口">
       <svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
       全部停止
-    </button>
-    <button id="newnode" title="新建一个节点（协议与端口）">
-      <svg viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/></svg>
-      新建节点
     </button>
     <button class="primary" id="newexit">
       <svg viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
@@ -238,7 +253,23 @@ textarea:focus{outline:none;border-color:var(--accent)}
 
   <div id="list"></div>
 
-  <div id="orphans"></div>
+  <div class="bar" style="margin-top:22px">
+    <h2>分流规则</h2>
+    <span class="count" id="rcount"></span>
+    <span class="spacer"></span>
+    <button class="primary" id="newrule">
+      <svg viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+      新建规则
+    </button>
+  </div>
+  <div class="barhint">按顺序匹配，先命中先生效。</div>
+  <div id="rules"></div>
+
+  <div class="bar" style="margin-top:22px">
+    <h2>入站</h2>
+    <span class="count" id="icount"></span>
+  </div>
+  <div id="inbounds"></div>
 </main>
 
 <div class="modal" id="wizard">
@@ -269,11 +300,6 @@ textarea:focus{outline:none;border-color:var(--accent)}
         </div>
         <div class="hint" id="availhint"></div>
       </label>
-      <label class="f" id="tplwrap">
-        <span>节点链接</span>
-        <select id="tpl"></select>
-        <div class="hint" id="tplhint"></div>
-      </label>
     </div>
     <div class="foot">
       <span class="count" id="wzhint"></span>
@@ -284,93 +310,11 @@ textarea:focus{outline:none;border-color:var(--accent)}
   </div>
 </div>
 
-<div class="modal" id="newnodebox">
-  <div class="sheet">
-    <div class="head">
-      <h2>新建节点</h2>
-      <span class="spacer"></span>
-      <button class="icon" data-close="newnodebox" title="关闭">
-        <svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
-      </button>
-    </div>
-    <div class="body">
-      <label class="f">
-        <span>协议</span>
-        <select id="nproto">
-          <option value="vless">VLESS</option>
-          <option value="vmess">VMess</option>
-          <option value="trojan">Trojan</option>
-        </select>
-      </label>
-      <label class="f">
-        <span>传输</span>
-        <select id="nnet">
-          <option value="tcp">TCP</option>
-          <option value="ws">WebSocket</option>
-          <option value="grpc">gRPC</option>
-          <option value="httpupgrade">HTTPUpgrade</option>
-          <option value="xhttp">XHTTP</option>
-        </select>
-      </label>
-      <label class="f">
-        <span>安全</span>
-        <select id="nsec">
-          <option value="none">无</option>
-          <option value="tls">TLS</option>
-          <option value="reality">REALITY</option>
-        </select>
-        <div class="hint" id="nsechint"></div>
-      </label>
-      <label class="f" id="nvisionwrap" hidden>
-        <span>流控</span>
-        <label class="chk"><input type="checkbox" id="nvision"> xtls-rprx-vision</label>
-      </label>
-      <label class="f" id="nsniwrap" hidden>
-        <span>域名 SNI</span>
-        <input id="nsni" type="text" placeholder="留空用 localhost，将生成自签证书">
-      </label>
-      <label class="f" id="ncertwrap" hidden>
-        <span>证书路径</span>
-        <input id="ncert" type="text" placeholder="留空生成自签证书，如 /etc/ssl/x.crt">
-      </label>
-      <label class="f" id="nkeywrap" hidden>
-        <span>私钥路径</span>
-        <input id="nkey" type="text" placeholder="与证书成对填写，如 /etc/ssl/x.key">
-      </label>
-      <label class="f" id="ndestwrap" hidden>
-        <span>借用站点</span>
-        <input id="ndest" type="text" placeholder="留空用 www.tesla.com:443">
-      </label>
-      <label class="f" id="npathwrap" hidden>
-        <span id="npathlabel">路径</span>
-        <input id="npath" type="text" placeholder="留空自动生成">
-      </label>
-      <label class="f">
-        <span>端口</span>
-        <input id="nport" type="text" inputmode="numeric" placeholder="留空随机分配">
-      </label>
-      <label class="f">
-        <span>备注</span>
-        <input id="nremark" type="text" placeholder="留空自动命名">
-      </label>
-    </div>
-    <div class="foot">
-      <span class="count" id="nnhint"></span>
-      <span class="spacer"></span>
-      <button data-close="newnodebox">取消</button>
-      <button class="primary" id="ncreate">创建</button>
-    </div>
-  </div>
-</div>
-
 <div class="modal" id="detail">
   <div class="sheet">
     <div class="head">
-      <h2 id="dtitle">节点</h2>
+      <h2 id="dtitle">入站</h2>
       <span class="spacer"></span>
-      <button class="icon danger" id="ddel" title="删除这个入站">
-        <svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-      </button>
       <button class="icon" data-close="detail" title="关闭">
         <svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
       </button>
@@ -418,7 +362,7 @@ textarea:focus{outline:none;border-color:var(--accent)}
 <div class="modal" id="export">
   <div class="sheet">
     <div class="head">
-      <h2>节点链接</h2>
+      <h2>分享链接</h2>
       <span class="count" id="excount"></span>
       <span class="spacer"></span>
       <button id="copyall">
@@ -433,27 +377,47 @@ textarea:focus{outline:none;border-color:var(--accent)}
   </div>
 </div>
 
-<div class="modal" id="subbox">
+<div class="modal" id="rulebox">
   <div class="sheet">
     <div class="head">
-      <h2>订阅</h2>
-      <span class="count" id="subcount"></span>
+      <h2 id="rtitle">新建分流规则</h2>
       <span class="spacer"></span>
-      <button class="icon" data-close="subbox" title="关闭">
+      <button class="icon" data-close="rulebox" title="关闭">
         <svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
       </button>
     </div>
     <div class="body">
-      <label class="f"><span>订阅地址</span>
-        <input id="suburl" type="text" spellcheck="false" readonly></label>
-      <div class="hint">客户端里新建订阅填这条。以后加出口、删出口都会自己跟上，不用重新配。</div>
-      <div class="hint bad">地址最后那串口令等于密码，别发群里。</div>
-      <div class="hint">想看明文而不是 base64，地址后面加 <code>&amp;target=links</code>。</div>
+      <label class="f"><span>名称（可选）</span>
+        <input id="rname" type="text" placeholder="比如：奈飞走日本"></label>
+      <div class="f"><span class="lbl">入站（可多选）</span>
+        <div class="inchk" id="rins"></div></div>
+      <label class="f"><span>目标</span>
+        <select id="rexit"></select>
+        <div class="hint">fanout 出口没连通时这条规则暂不写进配置，连通后自动生效；已有出站的规则始终生效。</div></label>
+      <label class="chk" style="margin-bottom:14px"><input type="checkbox" id="rall"> 全部流量：不看条件，所选入站的所有流量都走这个目标</label>
+      <div id="rconds">
+        <label class="f"><span>自定义域名</span>
+          <textarea id="rdomains" class="dom" spellcheck="false" placeholder="netflix.com&#10;full:www.example.com&#10;keyword:nflx&#10;regex:^.+\.example\.org$&#10;203.0.113.0/24"></textarea>
+          <div class="hint">一行一个，也可以用逗号或空格隔开。直接写 netflix.com 匹配它和所有子域；full: 只匹配这个域名；keyword: 关键字；regex: 正则；IP / CIDR 匹配目标地址。</div></label>
+        <div class="f"><span class="lbl">已有规则集（可多选）</span>
+          <div class="inchk" id="rlocal"></div></div>
+        <div class="f"><span class="lbl">自定义规则集</span>
+          <div id="rsets"></div>
+          <button id="rsadd">
+            <svg viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+            添加规则集
+          </button>
+          <div class="hint">geosite:netflix、geoip:jp 自动用 SagerNet 官方规则集；也可以填远程地址（.srs 是 binary，.json 是 source，看不出来就手动选）。保存时先下载校验一次，sing-box 之后每天自己更新。</div></div>
+        <label class="chk"><input type="checkbox" id="rresolve"> 规则集里有 IP 段：先把域名解析成 IP 再匹配一遍</label>
+        <div class="hint">填了 IP/CIDR、geoip:，或选了名字带 geoip 的已有规则集时会自动解析，不用勾。</div>
+      </div>
+      <label class="chk" style="margin-top:14px"><input type="checkbox" id="renabled" checked> 启用</label>
     </div>
     <div class="foot">
+      <span class="count" id="rhint"></span>
       <span class="spacer"></span>
-      <button id="subreset">换一串口令</button>
-      <button class="primary" id="subcopy">复制地址</button>
+      <button data-close="rulebox">取消</button>
+      <button class="primary" id="rsave">保存</button>
     </div>
   </div>
 </div>
@@ -476,9 +440,8 @@ textarea:focus{outline:none;border-color:var(--accent)}
         <input id="setPath" type="text" spellcheck="false" placeholder="留空则去掉路径前缀"></label>
       <div class="hint" id="setPathHint">界面挂在这个路径下，扫端口的探不到。只能用字母数字和 - _。</div>
 
-      <label class="f" style="margin-top:16px"><span>节点后端</span>
-        <select id="setBackend"></select></label>
-      <div class="hint" id="setBackendHint">节点从哪来。装了 3x-ui 或 xray-cf-lite 就能直接接管，都没有就用自建。</div>
+      <label class="f" style="margin-top:16px"><span>节点后端</span></label>
+      <div class="hint" id="setBackendHint">sing-box：fanout 只写配置目录里的 fanout-outbounds.json 和 fanout-route.json。</div>
 
       <label class="chk" style="margin-top:16px"><input type="checkbox" id="setResi"> 只用家宽节点</label>
       <div class="hint" id="setResiHint">vpngate 里混着一批它自己的机房机器，出口一眼看得出是数据中心。勾着就只挑志愿者家宽。</div>
@@ -571,16 +534,10 @@ async function copy(text){
   toast(ok ? '已复制' : '复制失败，请手动选中', !ok);
 }
 
-let view = {exits:[], direct:[], panel:'', backend:'', public_ip:''};
-let inbounds = [];
+let view = {exits:[], inbounds:[], rules:[], panel:'', backend:'', public_ip:''};
 
-// 自建模式下入站由 fanout 自己管，界面要提供新建入口；
-// 接管 3x-ui 时入站归面板管，这里只读不写。
-function isNative(){ return view.backend === 'native'; }
-// xray-cf-lite 模式下节点归它管，fanout 只改路由，界面不给新建入口
-function isXCL(){ return view.backend === 'xray-cf-lite'; }
-const BACKEND_NAME = {'native':'自建 Xray', '3x-ui':'3x-ui', 'xray-cf-lite':'xray-cf-lite'};
-function backendName(){ return BACKEND_NAME[view.backend] || '3x-ui'; }
+// 后端是 fanout 管理的 sing-box。fanout 自己只管出口（socks 出站）和分流规则。
+function backendName(){ return 'sing-box'; }
 
 const STATUS = {up:'已连通', starting:'连接中', failed:'失败', stopped:'已停止'};
 
@@ -588,7 +545,7 @@ function renderExits(){
   const list = $('#list');
   const n = view.exits.length;
   $('#ecount').textContent = n ? n + ' 个' : '';
-  $('#exportAll').disabled = !view.exits.some(e => e.inbounds && e.inbounds.length);
+  $('#exportAll').disabled = !(view.inbounds || []).length;
   $('#stopall').disabled = !n;
 
   if(!n){
@@ -601,11 +558,12 @@ function renderExits(){
 
   list.innerHTML = view.exits.map(e => {
     const label = e.exit_ip || (e.status === 'starting' ? '连接中…' : '—');
-    const chips = (e.inbounds || []).length
-      ? e.inbounds.map(i => '<button class="chip" data-detail="' + i.id + '" title="'
-          + esc((i.remark || i.protocol) + ' · ' + i.protocol + ' :' + i.port) + '">'
-          + esc(i.protocol) + ' :' + i.port + '</button>').join('')
-      : '<span class="chip none">无节点</span>';
+    // 出口这一行列出指向它的分流规则，点开即编辑
+    const chips = (e.rules || []).length
+      ? e.rules.map(r => '<button class="chip" data-rule="' + r.id + '" title="分流规则'
+          + (r.enabled ? '' : '（已停用）') + '"' + (r.enabled ? '' : ' style="opacity:.5"') + '>'
+          + esc(r.name || ('规则 #' + r.id)) + '</button>').join('')
+      : '<span class="chip none">无规则</span>';
     const err = e.status === 'failed' && e.err
       ? '<div class="errline" title="' + esc(e.err) + '">' + esc(e.err) + '</div>' : '';
     // country 后端已经给成"国旗 中文"，再拼国家码就重复了
@@ -626,34 +584,77 @@ function renderExits(){
   }).join('');
 }
 
-// 停掉出口后它的入站会留在面板里。这些入站现在走直连，
-// 用户既看不出它们和 fanout 的关系，也没有清理入口，所以单独列出来。
-function renderOrphans(){
-  const box = $('#orphans');
-  const list = view.direct || [];
-  if(!list.length){ box.innerHTML = ''; return; }
-  const hasUp = view.exits.some(e => e.status === 'up');
-  box.innerHTML = '<div class="orphan"><div class="top">'
-    + '<h3>未绑定出口的入站</h3><span class="count">' + list.length + ' 个，走直连</span>'
-    + '<span class="spacer"></span>'
-    + (isXCL() ? ''
-        : '<button data-delorphans="1" title="删除这些入站">' + ICON.trash + '清理</button>')
-    + '</div>'
-    + list.map(i =>
-        '<div class="orow">'
-        + '<button class="chip" data-detail="' + i.id + '" title="'
-        +   esc((i.remark || i.protocol) + ' · ' + i.protocol + ' :' + i.port) + '">'
-        +   esc(i.remark || i.protocol) + ' :' + i.port + '</button>'
-        + '<span class="spacer"></span>'
-        + (hasUp
-            ? '<select class="obind" data-tag="' + esc(i.tag) + '">' + exitOptions('') + '</select>'
-            : '<span class="dim">先开一个出口</span>')
-        + (isXCL() ? ''
-            : '<button class="icon danger" data-delone="' + i.id + '" data-name="'
-              + esc((i.remark || i.protocol) + ' :' + i.port) + '" title="删除这个入站">'
-              + ICON.trash + '</button>')
-        + '</div>').join('')
-    + '</div>';
+// ---- 分流规则列表 ----
+const RSTATE = {up:'出口已连通', down:'出口还没连通，规则暂不生效', gone:'出口已停掉，规则不生效（编辑换一个出口）'};
+const OSTATE = {up:'已有出站，始终生效', gone:'配置目录里已经没有这个出站，规则不生效（编辑换一个目标）'};
+function stateTip(r){ return (r.target === 'outbound' ? OSTATE : RSTATE)[r.exit_state] || ''; }
+
+function shortRS(src){
+  if(/^geo(site|ip):/i.test(src)) return src;
+  try{ const u = new URL(src); return u.pathname.split('/').pop() || u.host; }catch(e){ return src; }
+}
+function ruleCond(r){
+  if(r.all) return '全部流量';
+  const parts = [];
+  const d = r.domains || [];
+  if(d.length) parts.push(d.slice(0, 3).join(' ') + (d.length > 3 ? ' 等 ' + d.length + ' 条' : ''));
+  const s = (r.local_rule_sets || []).concat((r.rule_sets || []).map(x => shortRS(x.source)));
+  if(s.length) parts.push('规则集 ' + s.join(' '));
+  return parts.join(' ｜ ');
+}
+
+function renderRules(){
+  const box = $('#rules');
+  const list = view.rules || [];
+  $('#rcount').textContent = list.length ? list.length + ' 条' : '';
+  if(!list.length){
+    box.innerHTML = '<div class="empty small">还没有分流规则。新建一条：选入站，填域名或规则集，选出口——只有命中的流量走出口。</div>';
+    return;
+  }
+  box.innerHTML = list.map((r, i) => {
+    const dot = !r.enabled ? 'off' : (r.active ? 'up' : 'failed');
+    const tip = !r.enabled ? '已停用' : (r.active ? '生效中' : (stateTip(r) || '不生效'));
+    const miss = new Set(r.missing_inbounds || []);
+    const ins = (r.inbounds || []).map(t => '<span class="chip static' + (miss.has(t) ? ' miss' : '') + '"'
+      + (miss.has(t) ? ' title="配置目录里已经没有这个入站"' : '') + '>' + esc(t) + '</span>').join('');
+    const name = r.name || ('规则 #' + r.id);
+    return '<div class="rule' + (r.enabled ? '' : ' off') + '">'
+      + '<span class="dot ' + dot + '" title="' + esc(tip) + '"></span>'
+      + '<span class="rno">' + (i + 1) + '</span>'
+      + '<span class="rname">' + esc(name) + '</span>'
+      + '<span class="chips">' + ins + '</span>'
+      + '<span class="rcond" title="' + esc(ruleCond(r)) + '">' + esc(ruleCond(r)) + '</span>'
+      + '<span class="rexit' + (r.exit_state === 'up' ? '' : ' bad') + '" title="' + esc(stateTip(r)) + '">→ '
+      +   esc(r.exit_label || r.outbound || r.exit)
+      +   (r.exit_state === 'gone' ? (r.target === 'outbound' ? '（已不存在）' : '（已停）') : '') + '</span>'
+      + '<span class="acts">'
+      +   '<button class="icon" data-rmove="' + r.id + '" data-dir="up" title="上移"' + (i === 0 ? ' disabled' : '') + '>'
+      +     '<svg viewBox="0 0 24 24"><path d="m18 15-6-6-6 6"/></svg></button>'
+      +   '<button class="icon" data-rmove="' + r.id + '" data-dir="down" title="下移"' + (i === list.length - 1 ? ' disabled' : '') + '>'
+      +     '<svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></button>'
+      +   '<button class="icon" data-renable="' + r.id + '" data-on="' + (r.enabled ? '0' : '1') + '" title="' + (r.enabled ? '停用' : '启用') + '">'
+      +     (r.enabled ? ICON.stop : ICON.ok) + '</button>'
+      +   '<button class="icon" data-rule="' + r.id + '" title="编辑">'
+      +     '<svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></button>'
+      +   '<button class="icon danger" data-rdel="' + r.id + '" data-name="' + esc(name) + '" title="删除">' + ICON.trash + '</button>'
+      + '</span></div>';
+  }).join('');
+}
+
+// ---- 入站（只读） ----
+function renderInbounds(){
+  const box = $('#inbounds');
+  const list = view.inbounds || [];
+  $('#icount').textContent = list.length ? list.length + ' 个' : '';
+  if(!list.length){
+    box.innerHTML = '<div class="empty small">配置目录里还没有入站。</div>';
+    return;
+  }
+  box.innerHTML = '<div class="orphan"><div class="chips">' + list.map(i =>
+      '<button class="chip" data-detail="' + i.id + '" title="来自 ' + esc(i.source || '') + '">'
+      + esc(i.tag) + ' · ' + esc(i.protocol) + ' :' + i.port
+      + (i.rules ? ' · ' + i.rules + ' 条规则' : '') + '</button>').join('')
+    + '</div></div>';
 }
 
 function renderJobs(jobs){
@@ -680,12 +681,9 @@ async function poll(){
     $('#panel').textContent = view.panel
       ? (backendName() + ': ' + view.panel)
       : (view.panel_info || '');
-    // xray-cf-lite 的节点由它自己生成，fanout 这边只管把它们导到哪条出口
-    $('#newnode').hidden = isXCL();
-    // 链接由 xray-cf-lite 的订阅体系发，fanout 这边导不出来
-    $('#exportAll').hidden = isXCL();
     renderExits();
-    renderOrphans();
+    renderRules();
+    renderInbounds();
   }catch(e){}
   try{ renderJobs(await api('/api/jobs') || []); }catch(e){}
 }
@@ -759,38 +757,6 @@ async function loadWizard(){
     renderRegions();
   }catch(e){ toast('读取地区失败: ' + e.message, true); }
 
-  const sel = $('#tpl');
-  // xray-cf-lite 模式不能复制节点，向导退化成"只开出口"，之后在节点详情里挑出口
-  if(isXCL()){
-    $('#tplwrap').hidden = true;
-    sel.innerHTML = '<option value="0">只开出口，不建节点</option>';
-    return;
-  }
-  $('#tplwrap').hidden = false;
-  try{
-    // 已经挂在出口上的多半是上一批复制出来的，拿它当模板会套娃，
-    // 所以把没绑出口的排在前面并默认选中
-    const v = await api('/api/exits');
-    const free = v.direct || [];
-    const bound = (v.exits || []).flatMap(e => e.inbounds || []);
-    inbounds = free.concat(bound);
-    if(!inbounds.length){
-      sel.innerHTML = '<option value="0">还没有节点</option>';
-      $('#tplhint').textContent = '先用上面的「新建节点」建一个，之后这里可以按它批量生成';
-      return;
-    }
-    const opt = i => '<option value="' + i.id + '">'
-      + esc(i.remark || ('端口 ' + i.port)) + ' · ' + esc(i.protocol)
-      + ' :' + i.port + '</option>';
-    sel.innerHTML =
-      (free.length ? '<optgroup label="未绑定出口">' + free.map(opt).join('') + '</optgroup>' : '')
-      + (bound.length ? '<optgroup label="已挂在出口上">' + bound.map(opt).join('') + '</optgroup>' : '')
-      + '<option value="0">只开出口，不建节点</option>';
-    $('#tplhint').textContent = '每个出口复制一份，客户端 UUID 保持一致，只有端口不同';
-  }catch(e){
-    sel.innerHTML = '<option value="0">' + backendName() + '不可用</option>';
-    $('#tplhint').textContent = e.message;
-  }
 }
 
 document.addEventListener('click', e => {
@@ -807,78 +773,6 @@ document.addEventListener('click', e => {
   }
 });
 
-// ---- 新建节点 ----
-document.addEventListener('click', e => {
-  if(e.target.closest('#newnode') || e.target.closest('#newnode2')){
-    $('#nnhint').textContent = '';
-    syncNodeForm();
-    openModal('newnodebox');
-  }
-});
-
-// 表单随协议/传输/安全层联动：只露出当前组合真正用得到的字段
-function syncNodeForm(){
-  const proto = $('#nproto').value;
-  const net   = $('#nnet').value;
-  const sec   = $('#nsec').value;
-
-  // REALITY 靠模仿 TLS 握手工作，套在自带头部的传输上没有意义
-  const realityOK = net === 'tcp' || net === 'xhttp' || net === 'grpc';
-  const secSel = $('#nsec');
-  for(const o of secSel.options){
-    if(o.value === 'reality') o.disabled = !realityOK;
-  }
-  if(secSel.value === 'reality' && !realityOK) secSel.value = 'none';
-
-  const cur = secSel.value;
-  $('#nsniwrap').hidden  = cur !== 'tls';
-  $('#ncertwrap').hidden = cur !== 'tls';
-  $('#nkeywrap').hidden  = cur !== 'tls';
-  $('#ndestwrap').hidden = cur !== 'reality';
-
-  // Vision 只在 VLESS + 裸 TCP + TLS/REALITY 下有效
-  const visionOK = proto === 'vless' && net === 'tcp' && cur !== 'none';
-  $('#nvisionwrap').hidden = !visionOK;
-  if(!visionOK) $('#nvision').checked = false;
-
-  const needPath = net === 'ws' || net === 'httpupgrade' || net === 'xhttp' || net === 'grpc';
-  $('#npathwrap').hidden = !needPath;
-  $('#npathlabel').textContent = net === 'grpc' ? '服务名' : '路径';
-
-  $('#nsechint').textContent =
-    cur === 'reality' ? '密钥与 shortId 自动生成' :
-    cur === 'tls'     ? '不填证书就用自签，链接会带证书指纹' : '';
-}
-$('#nproto').onchange = syncNodeForm;
-$('#nnet').onchange = syncNodeForm;
-$('#nsec').onchange = syncNodeForm;
-
-$('#ncreate').onclick = async e => {
-  const q = new URLSearchParams({
-    protocol: $('#nproto').value,
-    network:  $('#nnet').value,
-    security: $('#nsec').value,
-    port:     ($('#nport').value || '').trim(),
-    remark:   ($('#nremark').value || '').trim(),
-    path:     ($('#npath').value || '').trim(),
-    sni:      ($('#nsni').value || '').trim(),
-    cert:     ($('#ncert').value || '').trim(),
-    key:      ($('#nkey').value || '').trim(),
-    dest:     ($('#ndest').value || '').trim(),
-  });
-  if($('#nvision').checked) q.set('vision', '1');
-  e.target.disabled = true;
-  try{
-    const r = await api('/api/panel/inbound/new?' + q.toString(), {method:'POST'});
-    toast('已创建 ' + r.protocol + ' 节点，端口 ' + r.port);
-    closeModal('newnodebox');
-    $('#nport').value = '';
-    $('#nremark').value = '';
-    poll();
-  }catch(err){ toast(err.message, true); }
-  e.target.disabled = false;
-};
-
 $('#rgfilter').oninput = renderRegions;
 $('#minus').onclick = () => { step(-1); };
 $('#plus').onclick = () => { step(1); };
@@ -891,12 +785,11 @@ $('#count').oninput = updateAvail;
 
 $('#go').onclick = async e => {
   const want = Math.min(Number($('#count').value) || 1, availOf(region) || 1);
-  const tpl = $('#tpl').value || '0';
   e.target.disabled = true;
   try{
+    // 只开出口，不建入站；想让哪些流量走新出口，去「分流规则」里建规则
     await api('/api/provision?count=' + want
-      + (region === '*' ? '&every=1' : '&region=' + encodeURIComponent(region))
-      + '&template=' + tpl, {method:'POST'});
+      + (region === '*' ? '&every=1' : '&region=' + encodeURIComponent(region)), {method:'POST'});
     closeModal('wizard');
     poll();
   }catch(err){ toast(err.message, true); }
@@ -931,29 +824,6 @@ document.addEventListener('click', async e => {
     poll();
     return;
   }
-  const del = e.target.closest('[data-delorphans]');
-  if(del){
-    const list = view.direct || [];
-    if(!confirm('删除这 ' + list.length + ' 个未绑定节点？此操作不可撤销。')) return;
-    del.disabled = true;
-    try{
-      await api('/api/xui/delete?ids=' + list.map(i => i.id).join(','), {method:'POST'});
-      toast('已清理 ' + list.length + ' 个入站');
-    }catch(err){ toast(err.message, true); }
-    poll();
-    return;
-  }
-
-  const one = e.target.closest('[data-delone]');
-  if(one){
-    if(!confirm('删除入站 ' + one.dataset.name + '？此操作不可撤销。')) return;
-    one.disabled = true;
-    try{
-      await api('/api/xui/delete?ids=' + one.dataset.delone, {method:'POST'});
-      toast('已删除 ' + one.dataset.name);
-    }catch(err){ toast(err.message, true); }
-    poll();
-  }
 });
 
 $('#stopall').onclick = async e => {
@@ -965,179 +835,200 @@ $('#stopall').onclick = async e => {
   poll();
 };
 
-// ---- 节点详情 ----
-let curDetail = null;
-
-// 详情弹窗的重绘要跟轮询解耦：正在编辑时被 poll 刷掉输入会很烦
+// ---- 入站详情（只读） ----
 async function openDetail(id){
   $('#dbody').innerHTML = '<div class="empty">读取中…</div>';
-  curDetail = null;
-  $('#ddel').disabled = true;
   openModal('detail');
   try{
-    const d = await api('/api/xui/detail?id=' + id);
-    curDetail = d;
-    renderDetail(d);
-    $('#ddel').hidden = isXCL();
-    $('#ddel').disabled = isXCL();
+    renderDetail(await api('/api/inbounds/detail?id=' + id));
   }catch(err){
     $('#dbody').innerHTML = '<div class="empty">读取失败: ' + esc(err.message) + '</div>';
   }
 }
 
-// 出口下拉：列出所有已连通的隧道，外加"直连"。绑定按 Xray 的 inboundTag 走。
-function exitOptions(currentHost){
-  const up = view.exits.filter(e => e.status === 'up');
-  return '<option value=""' + (currentHost ? '' : ' selected') + '>直连（不走隧道）</option>'
-    + up.map(e => '<option value="' + esc(e.host) + '"'
-        + (e.host === currentHost ? ' selected' : '') + '>'
-        + esc((e.exit_ip || e.host) + ' · ' + (e.country || e.region)) + '</option>').join('');
-}
-
 function renderDetail(d){
-  const owner = view.exits.find(x => (x.inbounds || []).some(i => i.id === d.id));
-
-  const clients = (d.clients || []).map((c, i) => {
-    const link = (d.links || [])[i] || '';
-    return '<div class="client">'
-      + '<div class="crow">'
-      +   '<span class="cemail">' + esc(c.email) + '</span>'
-      +   '<span class="cid">' + esc(c.id) + '</span>'
-      +   '<span class="spacer"></span>'
-      +   (link ? '<button class="icon" data-copy="' + esc(link) + '" title="复制链接">' + ICON.copy + '</button>' : '')
-      +   '<button class="icon" data-creset="' + esc(c.email) + '" title="换一套凭据，旧链接立即失效">' + ICON.redo + '</button>'
-      +   '<button class="icon" data-cdel="' + esc(c.email) + '" title="删除这个客户端">' + ICON.trash + '</button>'
-      + '</div>'
-      + (link ? '<div class="share">' + esc(link) + '</div>' : '')
-      + '</div>';
-  }).join('');
-
-  $('#dtitle').textContent = (d.remark || '节点') + '　:' + d.port;
-  // xray-cf-lite 的节点归它自己管，这里只留出口选择，改端口/备注/客户端都不给
-  const editable = !isXCL();
+  $('#dtitle').textContent = d.tag + '　:' + d.port;
+  const rules = (view.rules || []).filter(r => (r.inbounds || []).includes(d.tag));
+  const links = d.links || [];
   $('#dbody').innerHTML = '<dl class="kv">'
-    + '<dt>出口</dt><dd><select id="dbind" data-tag="' + esc(d.tag) + '">'
-    +   exitOptions(owner ? owner.host : '') + '</select></dd>'
     + '<dt>协议</dt><dd>' + esc(d.protocol) + '　' + esc(d.network || '')
     +   (d.tls && d.tls !== 'none' ? '　' + esc(d.tls) : '') + '</dd>'
-    + '<dt>监听</dt><dd>' + esc(d.listen || '0.0.0.0') + '</dd>'
+    + '<dt>监听</dt><dd>' + esc(d.listen || '::') + ' :' + d.port + '</dd>'
+    + '<dt>来源</dt><dd>' + esc(d.source || '') + '</dd>'
+    + '<dt>用户</dt><dd>' + ((d.clients || []).map(c => esc(c.email)).join('、') || '<span class="dim">—</span>') + '</dd>'
+    + '<dt>分流</dt><dd>' + (rules.length
+        ? rules.map(r => '<button class="chip" data-rule="' + r.id + '">' + esc(r.name || ('规则 #' + r.id)) + '</button>').join(' ')
+        : '<span class="dim">没有规则，全部流量按原路由走</span>') + '</dd>'
     + '</dl>'
-    + (editable ? ('<div class="editbar">'
-    +   '<label class="ef"><span>备注</span>'
-    +     '<input id="dremark" type="text" value="' + esc(d.remark || '') + '"></label>'
-    +   '<label class="ef"><span>端口</span>'
-    +     '<input id="dport" type="text" inputmode="numeric" value="' + d.port + '"></label>'
-    +   '<label class="chk"><input type="checkbox" id="denable"'
-    +     (d.enable === false ? '' : ' checked') + '> 启用</label>'
-    +   '<span class="spacer"></span>'
-    +   '<button class="primary" id="dsave">保存</button>'
-    + '</div>'
-    + '<div class="chead"><h3>客户端</h3><span class="count">'
-    +   (d.clients || []).length + ' 个</span><span class="spacer"></span>'
-    +   '<button id="dcadd">' + ICON.plus + '添加</button></div>'
-    + (clients || '<div class="empty">没有客户端</div>'))
-    : '<div class="hint">这个节点由 xray-cf-lite 管，端口、UUID 和分享链接都去它那边改。这里只决定它走哪条出口。</div>');
+    + '<div class="chead"><h3>分享链接</h3><span class="count">' + links.length + ' 条</span></div>'
+    + (links.length ? links.map(l => '<div class="client"><div class="crow"><span class="spacer"></span>'
+        + '<button class="icon" data-copy="' + esc(l) + '" title="复制链接">' + ICON.copy + '</button></div>'
+        + '<div class="share">' + esc(l) + '</div></div>').join('')
+      : '<div class="empty small">这个协议推不出分享链接</div>');
 }
 
-// 未绑定区的出口下拉，选中即绑
-document.addEventListener('change', async e => {
-  const sel = e.target.closest('.obind');
-  if(!sel || !sel.value) return;
-  sel.disabled = true;
-  try{
-    await api('/api/xui/bind?tag=' + encodeURIComponent(sel.dataset.tag)
-      + '&host=' + encodeURIComponent(sel.value), {method:'POST'});
-    toast('已绑定');
-    poll();
-  }catch(err){ toast(err.message, true); sel.disabled = false; }
+document.addEventListener('click', e => {
+  const link = e.target.closest('[data-detail]');
+  if(link) openDetail(link.dataset.detail);
 });
 
-// 出口下拉改动即生效。绑定按 inboundTag 走，host 传空表示解绑回直连。
-document.addEventListener('change', async e => {
-  const sel = e.target.closest('#dbind');
-  if(!sel) return;
-  sel.disabled = true;
+// ---- 分流规则编辑 ----
+let curRule = null;
+
+function rsRow(src, fmt){
+  return '<div class="rsrow"><input type="text" class="rssrc" spellcheck="false"'
+    + ' placeholder="geosite:netflix / geoip:jp / https://…/x.srs" value="' + esc(src || '') + '">'
+    + '<select class="rsfmt"><option value="">自动</option>'
+    + '<option value="binary"' + (fmt === 'binary' ? ' selected' : '') + '>binary</option>'
+    + '<option value="source"' + (fmt === 'source' ? ' selected' : '') + '>source</option></select>'
+    + '<button class="icon danger" data-rsdel="1" title="移除">' + ICON.trash + '</button></div>';
+}
+
+function syncRuleForm(){
+  const all = $('#rall').checked;
+  $('#rconds').style.opacity = all ? '.4' : '';
+  $('#rconds').querySelectorAll('input,textarea,select,button').forEach(x => { x.disabled = all; });
+}
+$('#rall').onchange = syncRuleForm;
+
+function openRule(id){
+  const r = id ? (view.rules || []).find(x => x.id === Number(id)) : null;
+  if(id && !r){ toast('这条规则不在了', true); return; }
+  curRule = r;
+  $('#rtitle').textContent = r ? '编辑分流规则' : '新建分流规则';
+  $('#rname').value = r ? (r.name || '') : '';
+
+  const sel = new Set(r ? r.inbounds : []);
+  const ins = view.inbounds || [];
+  const missing = r ? (r.missing_inbounds || []) : [];
+  $('#rins').innerHTML = (ins.length || missing.length)
+    ? ins.map(i => '<label class="chk"><input type="checkbox" value="' + esc(i.tag) + '"'
+        + (sel.has(i.tag) ? ' checked' : '') + '> ' + esc(i.tag)
+        + ' <span class="dim">' + esc(i.protocol) + ' :' + i.port + '</span></label>').join('')
+      + missing.map(t => '<label class="chk" title="配置目录里已经没有这个入站，保存时会去掉">'
+        + '<input type="checkbox" disabled> <s>' + esc(t) + '</s></label>').join('')
+    : '<span class="dim">配置目录里还没有入站</span>';
+
+  // 目标：fanout 的出口，或配置目录里已有的出站 / 端点。value 带前缀区分两类
+  const exits = view.exits || [];
+  let eopts = exits.map(e => '<option value="exit:' + esc(e.host) + '"'
+    + (r && r.target !== 'outbound' && r.exit_host === e.host ? ' selected' : '') + '>'
+    + esc((e.label || e.host)
+      + (e.exit_ip && !(e.label || '').includes(e.exit_ip) ? ' · 出口 ' + e.exit_ip : '')
+      + ' · ' + (STATUS[e.status] || e.status))
+    + '</option>').join('');
+  if(r && r.target !== 'outbound' && r.exit_state === 'gone'){
+    eopts = '<option value="exit:' + esc(r.exit) + '" selected>（已停掉）' + esc(r.exit) + '</option>' + eopts;
+  }
+  const outs = view.outbounds || [];
+  let oopts = outs.map(o => '<option value="out:' + esc(o.tag) + '"'
+    + (r && r.outbound === o.tag ? ' selected' : '') + '>'
+    + esc(o.tag + ' · ' + o.type + (o.endpoint ? ' 端点' : '') + ' · ' + o.file) + '</option>').join('');
+  if(r && r.target === 'outbound' && r.exit_state === 'gone'){
+    oopts = '<option value="out:' + esc(r.outbound) + '" selected>（已不存在）' + esc(r.outbound) + '</option>' + oopts;
+  }
+  $('#rexit').innerHTML = (eopts ? '<optgroup label="fanout 出口">' + eopts + '</optgroup>' : '')
+    + (oopts ? '<optgroup label="已有出站">' + oopts + '</optgroup>' : '')
+    || '<option value="">还没有出口，先新建出口</option>';
+
+  // 已有规则集：配置目录里别的文件定义的 route.rule_set，直接按 tag 引用
+  const lsel = new Set(r ? (r.local_rule_sets || []) : []);
+  const lsets = view.rule_sets || [];
+  const lmiss = r ? (r.missing_rule_sets || []) : [];
+  $('#rlocal').innerHTML = (lsets.length || lmiss.length)
+    ? lsets.map(x => '<label class="chk" title="来自 ' + esc(x.file || '') + '"><input type="checkbox" value="' + esc(x.tag) + '"'
+        + (lsel.has(x.tag) ? ' checked' : '') + '> ' + esc(x.tag)
+        + ' <span class="dim">' + esc(x.type || '') + '</span></label>').join('')
+      + lmiss.map(t => '<label class="chk" title="配置目录里已经没有这个规则集，保存时会去掉">'
+        + '<input type="checkbox" disabled> <s>' + esc(t) + '</s></label>').join('')
+    : '<span class="dim">配置目录里没有定义规则集</span>';
+
+  $('#rall').checked = !!(r && r.all);
+  $('#rdomains').value = r ? (r.domains || []).join('\n') : '';
+  $('#rsets').innerHTML = (r ? (r.rule_sets || []) : []).map(x => rsRow(x.source, x.format)).join('');
+  $('#rresolve').checked = !!(r && r.resolve_ip);
+  $('#renabled').checked = r ? !!r.enabled : true;
+  $('#rhint').textContent = '';
+  $('#rhint').className = 'count';
+  syncRuleForm();
+  openModal('rulebox');
+}
+
+$('#rsadd').onclick = () => { $('#rsets').insertAdjacentHTML('beforeend', rsRow('', '')); };
+
+$('#rsave').onclick = async e => {
+  const all = $('#rall').checked;
+  const body = {
+    id: curRule ? curRule.id : 0,
+    name: $('#rname').value.trim(),
+    enabled: $('#renabled').checked,
+    inbounds: Array.from(document.querySelectorAll('#rins input:checked:not(:disabled)')).map(x => x.value),
+    exit: $('#rexit').value.startsWith('exit:') ? $('#rexit').value.slice(5) : '',
+    outbound: $('#rexit').value.startsWith('out:') ? $('#rexit').value.slice(4) : '',
+    all: all,
+    domains: all ? '' : $('#rdomains').value,
+    rule_sets: all ? [] : Array.from(document.querySelectorAll('#rsets .rsrow')).map(row => ({
+      source: row.querySelector('.rssrc').value.trim(),
+      format: row.querySelector('.rsfmt').value,
+    })).filter(x => x.source),
+    local_rule_sets: all ? [] : Array.from(document.querySelectorAll('#rlocal input:checked:not(:disabled)')).map(x => x.value),
+    resolve_ip: !all && $('#rresolve').checked,
+  };
+  const btn = e.target.closest('button');
+  btn.disabled = true;
+  $('#rhint').className = 'count';
+  $('#rhint').textContent = body.rule_sets.length ? '正在下载校验规则集…' : '保存中…';
   try{
-    await api('/api/xui/bind?tag=' + encodeURIComponent(sel.dataset.tag)
-      + '&host=' + encodeURIComponent(sel.value), {method:'POST'});
-    toast(sel.value ? '已绑定' : '已解绑');
+    await api('/api/rules/save', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body),
+    });
+    toast('已保存');
+    closeModal('rulebox');
     poll();
-  }catch(err){ toast(err.message, true); }
-  sel.disabled = false;
-});
+  }catch(err){
+    // 规则的报错常常很长（规则集地址、校验失败原因），留在弹窗里让人看全
+    $('#rhint').className = 'count hint bad';
+    $('#rhint').textContent = err.message;
+  }
+  btn.disabled = false;
+};
 
 document.addEventListener('click', async e => {
-  const link = e.target.closest('[data-detail]');
-  if(link) return openDetail(link.dataset.detail);
+  if(e.target.closest('#newrule')){ openRule(0); return; }
+  const rsdel = e.target.closest('[data-rsdel]');
+  if(rsdel){ rsdel.closest('.rsrow').remove(); return; }
+  const ed = e.target.closest('[data-rule]');
+  if(ed){ closeModal('detail'); openRule(ed.dataset.rule); return; }
 
-  if(e.target.closest('#dsave')){
-    const btn = e.target.closest('#dsave');
-    btn.disabled = true;
-    const q = new URLSearchParams({
-      id: curDetail.id,
-      port: ($('#dport').value || '').trim(),
-      remark: ($('#dremark').value || '').trim(),
-      enable: $('#denable').checked ? '1' : '0',
-    });
-    try{
-      await api('/api/panel/inbound/update?' + q, {method:'POST'});
-      toast('已保存');
-      await openDetail(curDetail.id);
-      poll();
-    }catch(err){ toast(err.message, true); btn.disabled = false; }
+  const mv = e.target.closest('[data-rmove]');
+  if(mv){
+    mv.disabled = true;
+    try{ await api('/api/rules/move?id=' + mv.dataset.rmove + '&dir=' + mv.dataset.dir, {method:'POST'}); }
+    catch(err){ toast(err.message, true); }
+    poll();
     return;
   }
-
-  const add = e.target.closest('#dcadd');
-  if(add){
-    add.disabled = true;
+  const en = e.target.closest('[data-renable]');
+  if(en){
+    en.disabled = true;
     try{
-      await api('/api/panel/client/add?id=' + curDetail.id, {method:'POST'});
-      toast('已添加客户端');
-      await openDetail(curDetail.id);
-    }catch(err){ toast(err.message, true); add.disabled = false; }
+      await api('/api/rules/enable?id=' + en.dataset.renable + '&on=' + en.dataset.on, {method:'POST'});
+      toast(en.dataset.on === '1' ? '已启用' : '已停用');
+    }catch(err){ toast(err.message, true); }
+    poll();
     return;
   }
-
-  const del = e.target.closest('[data-cdel]');
+  const del = e.target.closest('[data-rdel]');
   if(del){
-    if(!confirm('删除客户端 ' + del.dataset.cdel + '？它的链接会立即失效。')) return;
+    if(!confirm('删除分流规则「' + del.dataset.name + '」？')) return;
     del.disabled = true;
     try{
-      await api('/api/panel/client/del?id=' + curDetail.id
-        + '&email=' + encodeURIComponent(del.dataset.cdel), {method:'POST'});
+      await api('/api/rules/delete?id=' + del.dataset.rdel, {method:'POST'});
       toast('已删除');
-      await openDetail(curDetail.id);
-    }catch(err){ toast(err.message, true); del.disabled = false; }
-    return;
-  }
-
-  const reset = e.target.closest('[data-creset]');
-  if(reset){
-    if(!confirm('重置 ' + reset.dataset.creset + ' 的凭据？已分发的旧链接会立即失效。')) return;
-    reset.disabled = true;
-    try{
-      await api('/api/panel/client/reset?id=' + curDetail.id
-        + '&email=' + encodeURIComponent(reset.dataset.creset), {method:'POST'});
-      toast('已重置');
-      await openDetail(curDetail.id);
-    }catch(err){ toast(err.message, true); reset.disabled = false; }
-    return;
-  }
-
-  // 详情弹窗里删掉当前这个入站
-  const dd = e.target.closest('#ddel');
-  if(dd && curDetail){
-    const name = (curDetail.remark || curDetail.protocol || '节点') + ' :' + curDetail.port;
-    if(!confirm('删除入站 ' + name + '？它的所有客户端链接都会失效，且不可撤销。')) return;
-    dd.disabled = true;
-    try{
-      await api('/api/xui/delete?ids=' + curDetail.id, {method:'POST'});
-      toast('已删除 ' + name);
-      curDetail = null;
-      closeModal('detail');
-      poll();
-    }catch(err){ toast(err.message, true); dd.disabled = false; }
+    }catch(err){ toast(err.message, true); }
+    poll();
   }
 });
 
@@ -1213,69 +1104,31 @@ $('#crsave').onclick = async e => {
 
 // ---- 导出 ----
 $('#exportAll').onclick = async () => {
-  const ids = view.exits.flatMap(x => (x.inbounds || []).map(i => i.id));
-  if(!ids.length){ toast('还没有节点可导出', true); return; }
+  const ids = (view.inbounds || []).map(i => i.id);
+  if(!ids.length){ toast('还没有入站可导出', true); return; }
   $('#exbox').value = '读取中…';
   $('#excount').textContent = '';
   openModal('export');
   try{
-    const d = await api('/api/xui/links?ids=' + ids.join(','));
+    const d = await api('/api/inbounds/links?ids=' + ids.join(','));
     $('#exbox').value = (d.links || []).join('\n');
     $('#excount').textContent = (d.links || []).length + ' 条';
   }catch(err){ $('#exbox').value = '导出失败: ' + err.message; }
 };
 $('#copyall').onclick = () => { const v = $('#exbox').value; if(v) copy(v); };
 
-// ---- 订阅 ----
-// 地址用 location.origin 拼：后端给的是访问路径下的相对部分，
-// 这样反代、改端口、换路径之后拿到的都是用户此刻真正能访问的地址。
-async function showSub(d){
-  $('#suburl').value = location.origin + d.path;
-  const n = view ? view.exits.flatMap(x => (x.inbounds || [])).length : 0;
-  $('#subcount').textContent = n ? n + ' 个节点' : '还没有节点，先开出口再建节点链接';
-}
-$('#subBtn').onclick = async () => {
-  $('#suburl').value = '读取中…';
-  $('#subcount').textContent = '';
-  openModal('subbox');
-  try{ showSub(await api('/api/sub')); }
-  catch(err){ $('#suburl').value = '读取失败: ' + err.message; }
-};
-$('#subcopy').onclick = () => { const v = $('#suburl').value; if(v) copy(v); };
-$('#subreset').onclick = async e => {
-  if(!confirm('换一串口令？旧地址立刻失效，已经配过的客户端要重新填一次。')) return;
-  e.target.disabled = true;
-  try{
-    showSub(await api('/api/sub/reset', {method:'POST'}));
-    toast('已换新地址');
-  }catch(err){ toast(err.message, true); }
-  e.target.disabled = false;
-};
-
 // ---- 设置：改密码 / 改路径 / 改端口 / 改本地监听 ----
 let curSettings = null;
-let curBackend = null;
 
-// 后端切换：把本机能用的模式列出来，装了的可选，没装的置灰并说明原因
+// 后端只有 sing-box 一种，设置里只显示它的状态
 async function loadBackendModes(){
-  const sel = $('#setBackend');
   const hint = $('#setBackendHint');
   try{
-    const m = await api('/api/panel/mode');
-    curBackend = m.mode || '';
-    sel.innerHTML = '<option value="">自动（按本机装了什么挑）</option>'
-      + (m.modes || []).map(x =>
-          '<option value="' + esc(x.mode) + '"' + (x.available ? '' : ' disabled')
-          + '>' + esc(x.label) + (x.available ? '' : '（没装）') + '</option>').join('');
-    sel.value = curBackend;
-    const bad = (m.modes || []).filter(x => !x.available);
-    hint.textContent = m.describe
-      ? ('当前：' + m.describe + (bad.length ? '。灰掉的是本机没装的。' : ''))
-      : '节点从哪来。装了 3x-ui 或 xray-cf-lite 就能直接接管，都没有就用自建。';
-  }catch(err){
-    sel.innerHTML = '<option value="">读取失败</option>';
-    hint.textContent = err.message;
-  }
+    const m = await api('/api/backend');
+    hint.textContent = m.available
+      ? ('当前：' + m.describe + '。fanout 只写配置目录里的 fanout-outbounds.json 和 fanout-route.json。')
+      : ('sing-box 不可用：' + (m.reason || ''));
+  }catch(err){ hint.textContent = err.message; }
 }
 
 $('#settingsBtn').onclick = async () => {
@@ -1370,17 +1223,6 @@ $('#setSave').onclick = async e => {
     || body.listen_addr !== (curSettings.listen_addr || '0.0.0.0'));
 
   try{
-    // 后端和其它设置分属两个接口，先切后端：切失败就别继续，免得用户以为整单都生效了
-    const backend = $('#setBackend').value;
-    if(curBackend !== null && backend !== curBackend){
-      const r = await api('/api/panel/mode', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({mode: backend}),
-      });
-      curBackend = r.mode || '';
-      $('#setBackendHint').textContent = '当前：' + (r.describe || r.kind || '已切换');
-    }
     await api('/api/settings', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
