@@ -23,9 +23,6 @@ type WebSettings struct {
 	// 用指针是为了区分"没配过"和"明确关掉"：老版本升上来的配置文件里没有这个
 	// 字段，nil 按默认的开启处理。
 	ResidentialOnly *bool `json:"residential_only,omitempty"`
-	// SubToken 是订阅地址里的口令。订阅要免登录才能被客户端拉取，
-	// 所以这串就是它唯一的门槛，等同于密码，不要外传。
-	SubToken string `json:"sub_token,omitempty"`
 }
 
 // residentialOnly 返回"只用家宽"是否开启。没配过时默认开：
