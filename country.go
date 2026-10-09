@@ -1,9 +1,6 @@
 package main
 
-import (
-	"strconv"
-	"strings"
-)
+import "strings"
 
 // 国家码转成"国旗 中文"，界面和节点别名都用这个形式。
 //
@@ -105,30 +102,3 @@ func countryLabel(code, fallback string) string {
 
 // nodeLabel 是 countryLabel 的取节点信息版本。
 func nodeLabel(n Node) string { return countryLabel(n.CountryCode, n.Country) }
-
-// isGeneratedLabel 判断一个备注是不是 fanout 自己起的名字。
-//
-// 判据是开头那个国旗 emoji。用户手工起的备注极少这么开头，
-// 所以这条足够把"自动名"和"我自己改的名"分开——换节点时只改前者，
-// 用户改过的名字不能被悄悄冲掉。
-func isGeneratedLabel(remark string) bool {
-	r := []rune(strings.TrimSpace(remark))
-	return len(r) > 0 && r[0] >= 0x1F1E6 && r[0] <= 0x1F1FF
-}
-
-// uniqueRemark 撞名时加序号。
-//
-// 同一条出口挂两个节点时别名会一样，而客户端（尤其 mihomo）要求名字唯一，
-// 重了会直接丢掉后面那个。
-func uniqueRemark(want string, taken map[string]bool) string {
-	if want == "" || !taken[want] {
-		return want
-	}
-	for i := 2; i < 1000; i++ {
-		cand := want + " " + strconv.Itoa(i)
-		if !taken[cand] {
-			return cand
-		}
-	}
-	return want
-}
