@@ -78,8 +78,12 @@ func (m *Manager) Start(node Node) (*Tunnel, error) {
 		m.mu.Unlock()
 		return nil, err
 	}
-	// 端口随机取，避免固定规律撞上机器上的其他服务
+	// 端口随机取，避免固定规律撞上机器上的其他服务；
+	// 也避开本机已知被占用但未必正在监听的端口（warp socks、本地 API）
 	taken := map[int]bool{}
+	for _, p := range reservedPorts {
+		taken[p] = true
+	}
 	for _, other := range m.tunnels {
 		taken[other.Port] = true
 	}
@@ -111,8 +115,8 @@ func (m *Manager) Start(node Node) (*Tunnel, error) {
 // bringUp 把一条隧道拉起来。
 //
 // notify 决定成功后是否立刻重建后端配置。换节点重连时要传 false：
-// 那条路径随后会调 rebind/resync 把入站改绑到新节点，在那之前重建配置
-// 会因为入站还指着旧节点名而把路由规则丢掉。
+// 那条路径随后会调 rebind/resync 把分流规则改指新节点，在那之前重建配置
+// 会因为规则还指着旧节点名而把它们跳过。
 func (m *Manager) bringUp(t *Tunnel, notify bool) {
 	m.bringUpPersist(t, notify, false)
 }
@@ -364,8 +368,8 @@ func (m *Manager) StopAll() {
 
 // SetCred 改一条出口的 SOCKS5 凭据。cred 两个字段都为空表示随机重置。
 //
-// 改完要通知后端：本机 Xray 的 socks 出站里带着这套凭据，
-// 不同步的话面板侧的节点会立刻连不上自己的出口。
+// 改完要通知后端：sing-box 的 socks 出站里带着这套凭据，
+// 不同步的话分流到这条出口上的流量会立刻连不上。
 func (m *Manager) SetCred(slot int, cred SocksCred) (SocksCred, error) {
 	m.mu.RLock()
 	t, ok := m.tunnels[slot]
@@ -393,54 +397,12 @@ func (m *Manager) SetCred(slot int, cred SocksCred) (SocksCred, error) {
 	return cred, nil
 }
 
-// ReconcileOutbounds 在启动恢复隧道后跑一次，把后端出站对齐到当前隧道（含 SOCKS5 凭据）。
-//
-// 只为 3x-ui 模式而生：它的 OnTunnelsChanged 是空操作，重启不会重写面板出站，
-// 而从旧版本升上来时面板里持久化的 socks 出站没有认证字段，端口一旦要认证就连不上。
-// 自建模式恢复时每条隧道 up 都会重建配置，本就自洽，这里跳过免得多重启一次 Xray。
-func (m *Manager) ReconcileOutbounds() {
-	p, err := openPanel()
-	if err != nil || p.Kind() != "3x-ui" {
-		return
-	}
-
-	// 等隧道尽量都起完再重写一次，避免只覆盖到先 up 的那几条
-	deadline := time.Now().Add(90 * time.Second)
-	for {
-		tunnels := m.Tunnels()
-		if len(tunnels) == 0 {
-			return
-		}
-		var up *Tunnel
-		settled := true
-		for _, t := range tunnels {
-			if t.Status == "up" && up == nil {
-				up = t
-			}
-			if t.Status == "starting" {
-				settled = false
-			}
-		}
-		if (settled || time.Now().After(deadline)) && up != nil {
-			if err := m.resync(up); err != nil {
-				log.Printf("启动对账面板出站失败: %v", err)
-			}
-			return
-		}
-		if settled || time.Now().After(deadline) {
-			return // 全 failed，没有可写的出站
-		}
-		time.Sleep(2 * time.Second)
-	}
-}
-
 // syncCred 把新凭据写进后端的 socks 出站。
 //
-// 两种后端的做法不同：自建模式整份重建配置，3x-ui 模式只改出站那一段。
-// 都走 ResyncOutbound，接口语义正好是"重写这条隧道对应的出站"。
+// 走 ResyncOutbound，整份重建 fanout 的 sing-box 配置。
 func (m *Manager) syncCred(t *Tunnel) {
 	if err := m.resync(t); err != nil {
-		log.Printf("同步 SOCKS5 凭据到节点链接后端失败: %v", err)
+		log.Printf("同步 SOCKS5 凭据到 sing-box 失败: %v", err)
 	}
 }
 
@@ -471,7 +433,7 @@ func (m *Manager) nodeInUse(host string, exceptSlot int) bool {
 	return false
 }
 
-// rebind 在隧道换节点后，把原先指向旧节点的 3x-ui 入站改绑到新节点。
+// rebind 在隧道换节点后，把原先指向旧节点的分流规则改指新节点。
 // 面板不可用时静默跳过，健康检查本身不应因此失败。
 func (m *Manager) rebind(oldHost string, t *Tunnel) error {
 	x, err := openPanel()
@@ -481,7 +443,7 @@ func (m *Manager) rebind(oldHost string, t *Tunnel) error {
 	return x.Rebind(oldHost, t, m.Tunnels())
 }
 
-// resync 在节点没换但重连过之后，把 3x-ui 的出站配置刷新一遍。
+// resync 在节点没换但重连过之后，把出站配置刷新一遍。
 // 面板不可用时静默跳过，健康检查本身不应因此失败。
 func (m *Manager) resync(t *Tunnel) error {
 	x, err := openPanel()
@@ -493,8 +455,8 @@ func (m *Manager) resync(t *Tunnel) error {
 
 // notifyPanel 告诉后端隧道集合变了。
 //
-// 自建模式下出站是由隧道列表现算出来的，不通知的话新开的出口在 Xray 里
-// 没有对应的 socks 出站，绑定会指向一个不存在的 tag。接管 3x-ui 时是空操作。
+// 出站是由隧道列表现算出来的，不通知的话新开的出口在 sing-box 里
+// 没有对应的 socks 出站，指向它的分流规则也写不进去。
 // 后端不可用不该让开关出口失败，所以只记日志。
 func (m *Manager) notifyPanel() {
 	p, err := openPanel()
@@ -502,6 +464,6 @@ func (m *Manager) notifyPanel() {
 		return
 	}
 	if err := p.OnTunnelsChanged(m.Tunnels()); err != nil {
-		log.Printf("同步节点链接后端失败: %v", err)
+		log.Printf("同步 sing-box 配置失败: %v", err)
 	}
 }
