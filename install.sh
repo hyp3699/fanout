@@ -48,7 +48,7 @@ svc_install() {
     # 端口不写进服务文件：它由 ${WORK_DIR}/settings.json 决定（见 seed_settings），
     # 两处都写会互相拽回旧值——界面改完重启失效，或 f 改完被配置覆盖。
     # 老版本模板里可能还带 -web，一并去掉。
-    sed "s#-web [0-9]* ##; s#-dir /var/lib/fanout#-dir ${WORK_DIR}#" fanout.service \
+    sed "s#-web [0-9]* ##; s#-dir /var/lib/fanout#${FANOUT_ARGS}#" fanout.service \
       > /etc/systemd/system/fanout.service
     systemctl daemon-reload
   else
@@ -59,7 +59,7 @@ svc_install() {
 name="fanout"
 description="fanout - VPN Gate 出口扇出网关"
 command="${BIN}"
-command_args="-dir ${WORK_DIR}"
+command_args="${FANOUT_ARGS}"
 command_background=true
 pidfile="/run/fanout.pid"
 output_log="/var/log/fanout.log"
@@ -102,11 +102,9 @@ pkg_for() {
   case "$cmd" in
     openvpn)  echo openvpn ;;
     curl)     echo curl ;;
-    openssl)  echo openssl ;;
     tar)      echo tar ;;
     ip)       case "$mgr" in apk) echo iproute2 ;; pacman) echo iproute2 ;; *) echo iproute ;; esac ;;
     iptables) echo iptables ;;
-    unzip)    echo unzip ;;
   esac
 }
 
@@ -137,7 +135,7 @@ MGR=$(detect_mgr)
 [[ "$MGR" == "apt-get" ]] && iproute_pkg=iproute2 || iproute_pkg=iproute
 
 need_cmd=()
-for c in openvpn curl openssl tar iptables; do
+for c in openvpn curl tar iptables; do
   command -v "$c" >/dev/null || need_cmd+=("$c")
 done
 command -v ip >/dev/null || need_cmd+=(ip)
@@ -160,7 +158,7 @@ if [[ ${#need_cmd[@]} -gt 0 ]]; then
 fi
 
 echo "[2/6] 获取程序"
-REPO="${REPO:-byJoey/fanout}"
+REPO="${REPO:-hyp3699/fanout}"
 ARCH=$(uname -m)
 case "$ARCH" in
   x86_64)  GOARCH=amd64 ;;
@@ -187,50 +185,79 @@ else
   rm -rf "$TMP"
 fi
 
-echo "[3/6] 准备 Xray"
-# 没有现成面板接管时 fanout 自己跑 Xray，需要一份二进制。
-# 装到 WORK_DIR/bin 下而不是 /usr/local/bin，避免和机器上别人的 xray 抢版本。
-mkdir -p "${WORK_DIR}/bin"
-if command -v /usr/local/x-ui/x-ui >/dev/null 2>&1 || [[ -x /usr/bin/x-ui ]]; then
-  echo "      检测到 3x-ui，入站交给面板管，跳过"
-elif [[ -d /etc/xray-cf-lite && -f /usr/local/etc/xray/config.json ]]; then
-  echo "      检测到 xray-cf-lite，入站交给它管，跳过"
-elif [[ -x "${WORK_DIR}/bin/xray" ]]; then
-  echo "      已有 $("${WORK_DIR}/bin/xray" version 2>/dev/null | head -1)"
+echo "[3/6] 准备 sing-box"
+# fanout 不建入站：它只往 SINGBOX_CONF 里写 fanout-outbounds.json（出口的 socks 出站）
+# 和 fanout-route.json（分流规则），入站用目录里已有的（比如 sb.sh 建的）。
+# sing-box 以 `run -C SINGBOX_CONF` 加载整个目录。机器上已有 sing-box 就直接用，
+# 目录里别人的文件 fanout 只读不写；没有才下载一份到 SINGBOX_DIR。
+SINGBOX_DIR="${SINGBOX_DIR:-/etc/sing-box}"
+SINGBOX_BIN="${SINGBOX_DIR}/sing-box"
+SINGBOX_CONF="${SINGBOX_CONF:-${SINGBOX_DIR}/conf}"
+mkdir -p "$SINGBOX_DIR" "$SINGBOX_CONF"
+if [[ -x "$SINGBOX_BIN" ]]; then
+  echo "      已有 $("$SINGBOX_BIN" version 2>/dev/null | head -1)，跳过下载"
 else
-  case "$GOARCH" in
-    amd64) XRAY_ASSET=Xray-linux-64.zip ;;
-    arm64) XRAY_ASSET=Xray-linux-arm64-v8a.zip ;;
-  esac
-  echo "      下载 Xray (${XRAY_ASSET})"
-  XT=$(mktemp -d)
-  XURL="https://github.com/XTLS/Xray-core/releases/latest/download/${XRAY_ASSET}"
-  if curl -fsSL "$XURL" -o "$XT/x.zip"; then
-    # 只为解一个 zip 装 unzip 有点重，busybox 环境常自带
-    if command -v unzip >/dev/null; then
-      unzip -qo "$XT/x.zip" -d "$XT"
-    elif command -v busybox >/dev/null && busybox unzip -h >/dev/null 2>&1; then
-      busybox unzip -qo "$XT/x.zip" -d "$XT"
-    else
-      [[ -n "$MGR" ]] && install_pkgs "$MGR" unzip >/dev/null 2>&1 || true
-      command -v unzip >/dev/null && unzip -qo "$XT/x.zip" -d "$XT"
-    fi
-    if [[ -f "$XT/xray" ]]; then
-      install -m 755 "$XT/xray" "${WORK_DIR}/bin/xray"
-      echo "      $("${WORK_DIR}/bin/xray" version 2>/dev/null | head -1)"
-    else
-      echo "      解压失败，自建模式不可用（装了 3x-ui 则不受影响）" >&2
-    fi
-  else
-    echo "      下载失败，自建模式不可用（装了 3x-ui 则不受影响）" >&2
+  # latest 的版本号从跳转地址里取，不走 GitHub API（匿名调用很容易被限流）
+  SB_TAG="${SINGBOX_VERSION:-}"
+  if [[ -z "$SB_TAG" ]]; then
+    SB_TAG=$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
+      https://github.com/SagerNet/sing-box/releases/latest | sed 's#.*/tag/##')
   fi
-  rm -rf "$XT"
+  SB_VER="${SB_TAG#v}"
+  if [[ -z "$SB_VER" || "$SB_VER" == http* ]]; then
+    echo "      取不到 sing-box 最新版本号，可用 SINGBOX_VERSION=1.x.y 指定" >&2
+  else
+    # Alpine 是 musl，官方给的是 -musl 包
+    SB_LIBC=""
+    if ldd --version 2>&1 | grep -qi musl || [[ -f /etc/alpine-release ]]; then SB_LIBC="-musl"; fi
+    SB_ASSET="sing-box-${SB_VER}-linux-${GOARCH}${SB_LIBC}.tar.gz"
+    echo "      下载 sing-box ${SB_VER} (${SB_ASSET})"
+    ST=$(mktemp -d)
+    SURL="https://github.com/SagerNet/sing-box/releases/download/v${SB_VER}/${SB_ASSET}"
+    if curl -fsSL "$SURL" -o "$ST/sb.tar.gz" && tar xzf "$ST/sb.tar.gz" -C "$ST"; then
+      SB_SRC=$(find "$ST" -type f -name sing-box | head -1)
+      if [[ -n "$SB_SRC" ]]; then
+        install -m 755 "$SB_SRC" "$SINGBOX_BIN"
+        # 新版本的包里带着 libcronet.so（naive 出站用），放在二进制旁边
+        for lib in "$(dirname "$SB_SRC")"/*.so; do
+          [[ -f "$lib" ]] && install -m 644 "$lib" "$SINGBOX_DIR/"
+        done
+        echo "      $("$SINGBOX_BIN" version 2>/dev/null | head -1)"
+      else
+        echo "      解压后没找到 sing-box，分流功能不可用" >&2
+      fi
+    else
+      echo "      下载失败: $SURL，分流功能不可用" >&2
+    fi
+    rm -rf "$ST"
+  fi
 fi
+# 有 sing-box 服务（systemd/OpenRC）时 fanout 改完配置用它 reload；没有就由 fanout 自己托管进程
+if [[ "$INIT_SYS" == systemd ]] && systemctl cat sing-box.service >/dev/null 2>&1; then
+  echo "      检测到 sing-box.service，fanout 改完配置会 check + reload 它"
+elif [[ -f /etc/init.d/sing-box ]]; then
+  echo "      检测到 OpenRC sing-box 服务，fanout 改完配置会 reload 它"
+else
+  echo "      没有 sing-box 服务，fanout 会自己托管 sing-box run -C ${SINGBOX_CONF}"
+fi
+# 布局不是默认值时，把路径带进 fanout 的启动参数
+FANOUT_ARGS="-dir ${WORK_DIR}"
+[[ "$SINGBOX_BIN" != /etc/sing-box/sing-box ]] && FANOUT_ARGS+=" -singbox-bin ${SINGBOX_BIN}"
+[[ "$SINGBOX_CONF" != /etc/sing-box/conf ]] && FANOUT_ARGS+=" -singbox-conf ${SINGBOX_CONF}"
 
 echo "[4/6] 放行转发"
-sysctl -qw net.ipv4.ip_forward=1
-grep -q '^net.ipv4.ip_forward=1' /etc/sysctl.conf 2>/dev/null \
-  || echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf
+# Debian 13 等精简系统可能没装 procps（没有 sysctl 命令），也没有 /etc/sysctl.conf
+if command -v sysctl >/dev/null; then
+  sysctl -qw net.ipv4.ip_forward=1
+else
+  echo 1 > /proc/sys/net/ipv4/ip_forward
+fi
+if [[ -d /etc/sysctl.d ]]; then
+  echo 'net.ipv4.ip_forward=1' > /etc/sysctl.d/99-fanout.conf
+else
+  grep -q '^net.ipv4.ip_forward=1' /etc/sysctl.conf 2>/dev/null \
+    || echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf
+fi
 # FORWARD 链常有兜底 REJECT，fanout 用的网段要插到最前面
 if ! iptables -C FORWARD -s 10.99.0.0/16 -j ACCEPT 2>/dev/null; then
   iptables -I FORWARD 1 -s 10.99.0.0/16 -j ACCEPT
@@ -289,5 +316,5 @@ echo "  ────────────────────────
 echo "  交流群  https://t.me/+ft-zI76oovgwNmRh"
 echo "  油管    https://youtube.com/@joeyblog"
 echo "  博客    https://joeyblog.net"
-echo "  项目    https://github.com/byJoey/fanout"
+echo "  项目    https://github.com/hyp3699/fanout"
 echo
