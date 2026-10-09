@@ -18,6 +18,7 @@ func TestInMainNetnsRunsInMainNamespace(t *testing.T) {
 	if err := initMainNetns(); err != nil {
 		t.Skipf("拿不到网络命名空间，跳过: %v", err)
 	}
+	requireSetns(t)
 	want, err := os.Readlink("/proc/self/ns/net")
 	if err != nil {
 		t.Skipf("读不了命名空间，跳过: %v", err)
@@ -133,6 +134,7 @@ func TestCmdHelpers(t *testing.T) {
 	if err := initMainNetns(); err != nil {
 		t.Skipf("拿不到网络命名空间，跳过: %v", err)
 	}
+	requireSetns(t)
 
 	out, err := cmdOutput(exec.Command("echo", "母机"))
 	if err != nil {
@@ -173,6 +175,7 @@ func TestInMainNetnsRepeated(t *testing.T) {
 	if err := initMainNetns(); err != nil {
 		t.Skipf("拿不到网络命名空间，跳过: %v", err)
 	}
+	requireSetns(t)
 	want, err := os.Readlink("/proc/self/ns/net")
 	if err != nil {
 		t.Skip(err)
@@ -189,5 +192,16 @@ func TestInMainNetnsRepeated(t *testing.T) {
 		if got != want {
 			t.Fatalf("第 %d 次跑错了命名空间: %s", i, got)
 		}
+	}
+}
+
+// requireSetns 在没有 CAP_SYS_ADMIN 的环境（容器、非 root）里跳过用例：
+// 那里连切回自己所在的命名空间都会 EPERM，测不出任何东西。
+// 测完把 mainNetns 清掉，免得后面的用例都去 Setns。
+func requireSetns(t *testing.T) {
+	t.Helper()
+	t.Cleanup(func() { mainNetns = nil })
+	if err := inMainNetns(func() error { return nil }); err != nil {
+		t.Skipf("当前环境不能 setns，跳过: %v", err)
 	}
 }
