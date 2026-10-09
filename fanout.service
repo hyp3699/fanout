@@ -1,6 +1,6 @@
 [Unit]
 Description=fanout - VPN Gate 出口扇出网关
-After=network-online.target
+After=network-online.target sing-box.service
 Wants=network-online.target
 
 [Service]
