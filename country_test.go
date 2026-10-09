@@ -44,20 +44,25 @@ func TestCountryLabel(t *testing.T) {
 	}
 }
 
-// 别名要能一眼看出国家，末段留着区分同国的多条出口。
+// 别名要能一眼看出国家，带上节点完整 IP 区分同国的多条出口。
 func TestExitLabel(t *testing.T) {
-	t1 := &Tunnel{Node: Node{CountryCode: "JP", Country: "Japan"}, ExitIP: "133.32.233.192"}
-	if got := exitLabel(t1); got != "🇯🇵 日本 192" {
+	t1 := &Tunnel{Node: Node{CountryCode: "JP", Country: "Japan", IP: "133.32.233.130"}, ExitIP: "133.32.233.192"}
+	if got := exitLabel(t1); got != "🇯🇵 日本 133.32.233.130" {
 		t.Fatalf("exitLabel=%q", got)
 	}
-	// 还没探到出口 IP 时退回主机名
+	// 节点 IP 缺失时用探到的出口 IP
+	t0 := &Tunnel{Node: Node{CountryCode: "JP", Country: "Japan"}, ExitIP: "133.32.233.192"}
+	if got := exitLabel(t0); got != "🇯🇵 日本 133.32.233.192" {
+		t.Fatalf("exitLabel=%q", got)
+	}
+	// 什么 IP 都没有时退回主机名
 	t2 := &Tunnel{Node: Node{CountryCode: "KR", Country: "Korea", HostName: "vpn123"}}
 	if got := exitLabel(t2); got != "🇰🇷 韩国 vpn123" {
 		t.Fatalf("exitLabel=%q", got)
 	}
-	// 同国两条出口的别名不能撞（mihomo 要求节点名唯一）
-	a := &Tunnel{Node: Node{CountryCode: "JP", Country: "Japan"}, ExitIP: "1.2.3.4"}
-	b := &Tunnel{Node: Node{CountryCode: "JP", Country: "Japan"}, ExitIP: "1.2.3.5"}
+	// 同国两条出口的别名不能撞
+	a := &Tunnel{Node: Node{CountryCode: "JP", Country: "Japan", IP: "1.2.3.4"}}
+	b := &Tunnel{Node: Node{CountryCode: "JP", Country: "Japan", IP: "1.2.3.5"}}
 	if exitLabel(a) == exitLabel(b) {
 		t.Fatal("同国不同出口的别名撞了")
 	}
