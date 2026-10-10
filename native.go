@@ -87,6 +87,19 @@ func (n *Native) refreshAdopted() {
 		a.ID = st.ID
 	}
 	n.adopted = list
+	// 老规则按入站 tag 匹配，迁移成那些入站里的用户名（auth_user）
+	inboundUsers := map[string][]string{}
+	for _, a := range list {
+		inboundUsers[a.Tag] = a.Users
+	}
+	for _, r := range n.store.Rules {
+		if len(r.Users) == 0 && len(r.Inbounds) > 0 {
+			if users := ruleUsers(r, inboundUsers); len(users) > 0 {
+				r.Users, r.Inbounds = users, nil
+				added = true
+			}
+		}
+	}
 	// 新发现的入站立刻记下 ID，重启后界面上的编号不变
 	if added {
 		if err := n.store.save(n.dir); err != nil {
@@ -215,12 +228,17 @@ func (n *Native) Close() {
 	n.runner.stop()
 }
 
-// ruleCount 统计每个入站 tag 被几条规则引用。
+// ruleCount 统计每个入站被几条规则引用（规则里有这个入站的任一用户就算）。
 func (n *Native) ruleCount() map[string]int {
 	c := map[string]int{}
-	for _, r := range n.store.Rules {
-		for _, t := range r.Inbounds {
-			c[t]++
+	for _, a := range n.adopted {
+		for _, r := range n.store.Rules {
+			for _, u := range r.Users {
+				if strIn(a.Users, u) {
+					c[a.Tag]++
+					break
+				}
+			}
 		}
 	}
 	return c
@@ -236,7 +254,7 @@ func (n *Native) Inbounds() ([]Inbound, error) {
 	for _, a := range n.adopted {
 		out = append(out, Inbound{
 			ID: a.ID, Port: a.Port, Protocol: a.Type, Tag: a.Tag,
-			Source: a.File, Rules: count[a.Tag],
+			Source: a.File, Rules: count[a.Tag], Users: append([]string{}, a.Users...),
 		})
 	}
 	return out, nil
@@ -256,7 +274,7 @@ func (n *Native) InboundDetail(id int, publicHost string) (*InboundDetail, error
 	detail := &InboundDetail{
 		Inbound: Inbound{
 			ID: a.ID, Port: a.Port, Protocol: a.Type, Tag: a.Tag,
-			Source: a.File, Rules: n.ruleCount()[a.Tag],
+			Source: a.File, Rules: n.ruleCount()[a.Tag], Users: append([]string{}, a.Users...),
 		},
 		Listen:  str(a.Raw["listen"]),
 		Network: "tcp",
@@ -332,6 +350,7 @@ func (n *Native) Existing() ([]ForeignOutbound, []ForeignRuleSet) {
 
 func cloneRule(r *RouteRule) RouteRule {
 	c := *r
+	c.Users = append([]string(nil), r.Users...)
 	c.Inbounds = append([]string(nil), r.Inbounds...)
 	c.LocalRuleSets = append([]string(nil), r.LocalRuleSets...)
 	c.Domains = append([]string(nil), r.Domains...)
@@ -346,10 +365,12 @@ func (n *Native) SaveRule(in RuleInput, tunnels []*Tunnel) (*RouteRule, error) {
 	n.mu.Lock()
 	n.refreshAdopted()
 	fc := scanForeign(singbox.ConfDir)
-	env := ruleEnv{Inbounds: map[string]bool{}, Exits: map[string]bool{},
+	env := ruleEnv{Users: map[string]bool{}, Exits: map[string]bool{},
 		Outbounds: fc.outboundTags(), RuleSets: fc.ruleSetTags()}
 	for _, a := range n.adopted {
-		env.Inbounds[a.Tag] = true
+		for _, u := range a.Users {
+			env.Users[u] = true
+		}
 	}
 	var prev *RouteRule
 	if in.ID != 0 {
