@@ -194,6 +194,14 @@ label.chk input{margin:0}
 .rule .rexit{font-size:12px;white-space:nowrap}
 .rule .rexit.bad{color:var(--bad)}
 .barhint{color:var(--dim);font-size:11px;margin:-6px 0 10px}
+.rule .uinfo{color:var(--dim);font-size:12px;white-space:nowrap}
+.rule .uinfo b{color:inherit;font-weight:600}
+.rule .uinfo.on{color:var(--fg, inherit)}
+.rule .uinfo.bad{color:var(--bad)}
+.urow{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.urow input{flex:1;min-width:140px}
+.usec{border-top:1px solid var(--line);padding-top:14px;margin-top:4px}
+.usec h3{font-size:13px;margin:0 0 10px}
 div.f{margin-bottom:16px}
 .f>.lbl{display:block;color:var(--dim);font-size:11px;margin-bottom:6px}
 .inchk{display:flex;flex-wrap:wrap;gap:6px 16px}
@@ -264,6 +272,13 @@ textarea.dom{min-height:120px}
   </div>
   <div class="barhint">按顺序匹配，先命中先生效。</div>
   <div id="rules"></div>
+
+  <div class="bar" style="margin-top:22px">
+    <h2>用户</h2>
+    <span class="count" id="ucount"></span>
+  </div>
+  <div class="barhint">按入站里的用户名设置限速和流量限制，与 sb.sh 共用设置。限速用户的分流规则照常生效。</div>
+  <div id="users"></div>
 
   <div class="bar" style="margin-top:22px">
     <h2>入站</h2>
@@ -418,6 +433,56 @@ textarea.dom{min-height:120px}
       <span class="spacer"></span>
       <button data-close="rulebox">取消</button>
       <button class="primary" id="rsave">保存</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="userbox">
+  <div class="sheet">
+    <div class="head">
+      <h2 id="utitle">用户</h2>
+      <span class="spacer"></span>
+      <button class="icon" data-close="userbox" title="关闭">
+        <svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
+    </div>
+    <div class="body">
+      <div class="usec" style="border-top:0;padding-top:0">
+        <h3>限速</h3>
+        <div class="hint" id="uspeedcur" style="margin-bottom:8px"></div>
+        <div class="urow">
+          <input id="uspeed" type="text" spellcheck="false" placeholder="单位 MB/s，例如 10 或 0.5；也可写 500KB、100Mbps">
+          <select id="umode">
+            <option value="bidirectional">上传+下载</option>
+            <option value="upload">仅上传</option>
+            <option value="download">仅下载</option>
+          </select>
+        </div>
+        <div class="hint" id="uspeedcalc">1 MB/s = 8 Mbps：填 1，实际网速就是 8 Mbps</div>
+        <div class="urow" style="margin-top:10px">
+          <span class="spacer"></span>
+          <button class="danger" id="uspeeddel">取消限速</button>
+          <button class="primary" id="uspeedsave">保存限速</button>
+        </div>
+      </div>
+      <div class="usec" style="margin-top:18px">
+        <h3>流量限制</h3>
+        <div class="hint" id="utrafcur" style="margin-bottom:8px"></div>
+        <div class="urow">
+          <input id="ulimit" type="text" spellcheck="false" placeholder="例如 2（=2GB）、500MB、1GB">
+          <select id="uperiod">
+            <option value="none">不重置</option>
+            <option value="day">每天重置</option>
+            <option value="month">每月重置</option>
+          </select>
+        </div>
+        <div class="hint">达到限制后由流量统计服务自动停用该用户；保存后本周期流量清零。</div>
+        <div class="urow" style="margin-top:10px">
+          <span class="spacer"></span>
+          <button class="danger" id="utrafdel">取消流量限制</button>
+          <button class="primary" id="utrafsave">保存流量限制</button>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -641,6 +706,143 @@ function renderRules(){
   }).join('');
 }
 
+// ---- 用户：限速 / 流量限制 ----
+let users = {users:[], traffic_ready:false, speed_ready:false}, curUser = '';
+const MODE = {bidirectional:'上传+下载', upload:'仅上传', download:'仅下载'};
+const PERIOD = {none:'不重置', day:'每天重置', month:'每月重置'};
+
+function fmtBytes(n){
+  n = Number(n) || 0;
+  const u = ['B','KB','MB','GB','TB']; let i = 0;
+  while(n >= 1024 && i < u.length - 1){ n /= 1024; i++; }
+  return (i ? n.toFixed(2).replace(/\.?0+$/, '') : n) + ' ' + u[i];
+}
+function trimN(v){ return String(Math.round(v * 100) / 100); }
+// 与后端 speedToBps / speedText 一致：MB = 1000*1000 字节/秒，Mbps = MB/8
+function speedBps(input){
+  const s = String(input || '').replace(/\s+/g, '');
+  if(/^\d*\.?\d+$/.test(s)) return parseFloat(s) * 1e6;
+  const m = s.match(/^(\d+)([A-Za-z]+)(\/[sS])?$/);
+  if(!m) return 0;
+  const n = Number(m[1]), u = m[2];
+  const l = u.toLowerCase();
+  if(l === 'kbps') return n * 1000 / 8;
+  if(l === 'mbps') return n * 1e6 / 8;
+  if(l === 'gbps') return n * 1e9 / 8;
+  if(l === 'k' || l === 'kb') return n * 1000;
+  if(l === 'm' || l === 'mb') return n * 1e6;
+  if(l === 'g' || l === 'gb') return n * 1e9;
+  return 0;
+}
+function speedLabel(bps){
+  const a = bps >= 1e6 ? trimN(bps / 1e6) + ' MB/s' : bps >= 1000 ? trimN(bps / 1000) + ' KB/s' : Math.round(bps) + ' B/s';
+  const m = bps * 8 / 1e6;
+  return a + '（实际网速 ' + (m >= 1 ? trimN(m) + ' Mbps' : trimN(bps * 8 / 1000) + ' Kbps') + '）';
+}
+function trafText(u){
+  const t = u.traffic;
+  if(!t) return '未设置';
+  if(t.disabled_by_limit && !t.enabled) return '已停用';
+  return fmtBytes(u.period_total) + ' / ' + fmtBytes(t.limit_bytes) + ' · ' + (PERIOD[t.period] || '不重置')
+    + (t.disabled_by_limit ? ' · 已停用' : '');
+}
+
+function renderUsers(){
+  const box = $('#users');
+  const list = users.users || [];
+  $('#ucount').textContent = list.length ? list.length + ' 个' : '';
+  if(!list.length){
+    box.innerHTML = '<div class="empty small">配置目录里的入站还没有用户。</div>';
+    return;
+  }
+  box.innerHTML = list.map(u => {
+    const ins = u.missing
+      ? '<span class="chip static miss" title="不在任何入站里（可能已到量停用）">不在入站</span>'
+      : (u.inbounds || []).map(t => '<span class="chip static">' + esc(t) + '</span>').join('');
+    const sp = u.speed ? (u.speed.text + ' ' + (MODE[u.speed.mode] || '')) : '未设置';
+    const tbad = u.traffic && u.traffic.disabled_by_limit;
+    return '<div class="rule">'
+      + '<span class="rname">' + esc(u.name) + '</span>'
+      + '<span class="chips">' + ins + '</span>'
+      + '<span class="rcond">已用 ' + esc(fmtBytes(u.total)) + (u.rules ? ' ｜ 分流 ' + u.rules + ' 条' : '') + '</span>'
+      + '<span class="uinfo' + (tbad ? ' bad' : '') + '">流量 ' + esc(trafText(u)) + '</span>'
+      + '<span class="uinfo">限速 ' + esc(sp) + '</span>'
+      + '<span class="acts"><button class="icon" data-user="' + esc(u.name) + '" title="限速 / 流量限制">'
+      +   '<svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></button></span>'
+      + '</div>';
+  }).join('');
+}
+
+function calcSpeedHint(){
+  const v = $('#uspeed').value.trim();
+  const bps = speedBps(v);
+  $('#uspeedcalc').textContent = v && bps > 0
+    ? '填 ' + v + ' → ' + speedLabel(bps)
+    : '1 MB/s = 8 Mbps：填 1，实际网速就是 8 Mbps';
+}
+$('#uspeed').oninput = calcSpeedHint;
+
+function fillUser(){
+  const u = (users.users || []).find(x => x.name === curUser);
+  if(!u) return;
+  $('#utitle').textContent = '用户 ' + u.name;
+  $('#uspeedcur').textContent = '当前限速：' + (u.speed ? u.speed.text + ' ' + (MODE[u.speed.mode] || '') : '未设置')
+    + (u.rules ? '　｜　该用户有 ' + u.rules + ' 条分流规则，限速后照常生效' : '')
+    + (users.speed_ready ? '' : '　｜　当前内核不支持限速，需要 -xhttp-limiter 版 sing-box');
+  $('#utrafcur').textContent = (users.traffic_ready ? '' : '未检测到流量统计服务（需要先用 sb.sh 安装）　｜　')
+    + '流量限制：' + trafText(u) + '　｜　本周期已用 ' + fmtBytes(u.period_total) + '，累计 ' + fmtBytes(u.total);
+  $('#uspeeddel').disabled = !u.speed;
+  $('#utrafdel').disabled = !u.traffic;
+}
+
+function openUser(name){
+  curUser = name;
+  const u = (users.users || []).find(x => x.name === name);
+  if(!u){ toast('这个用户不在了', true); return; }
+  $('#uspeed').value = u.speed ? (u.speed.speed.match(/^\d+MB$/) ? u.speed.speed.slice(0, -2) : u.speed.speed) : '';
+  $('#umode').value = u.speed ? u.speed.mode : 'bidirectional';
+  $('#ulimit').value = u.traffic && u.traffic.enabled
+    ? (u.traffic.limit_unit === 'GB' ? String(u.traffic.limit_value) : u.traffic.limit_value + 'MB') : '';
+  $('#uperiod').value = (u.traffic && u.traffic.period) || 'none';
+  calcSpeedHint();
+  fillUser();
+  openModal('userbox');
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-user]');
+  if(b) openUser(b.dataset.user);
+});
+
+async function userPost(path, body, btn, ok){
+  btn.disabled = true;
+  try{
+    await api(path, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    users = await api('/api/users'); renderUsers(); fillUser();
+    toast(ok);
+  }catch(err){ toast(err.message, true); }
+  btn.disabled = false;
+}
+$('#uspeedsave').onclick = e => {
+  const v = $('#uspeed').value.trim();
+  if(!v || !(speedBps(v) > 0)){ toast('请输入限速，例如 10、0.5、500KB、100Mbps', true); return; }
+  userPost('/api/users/speed', {name: curUser, speed: v, mode: $('#umode').value}, e.target, '限速已保存');
+};
+$('#uspeeddel').onclick = e => {
+  if(!confirm('取消 ' + curUser + ' 的限速？')) return;
+  $('#uspeed').value = ''; calcSpeedHint();
+  userPost('/api/users/speed', {name: curUser, speed: ''}, e.target, '已取消限速');
+};
+$('#utrafsave').onclick = e => {
+  const v = $('#ulimit').value.trim();
+  if(!v || v === '0'){ toast('请输入流量限制，例如 2（=2GB）、500MB', true); return; }
+  userPost('/api/users/traffic', {name: curUser, limit: v, period: $('#uperiod').value}, e.target, '流量限制已保存，本周期流量已清零');
+};
+$('#utrafdel').onclick = e => {
+  if(!confirm('取消 ' + curUser + ' 的流量限制？')) return;
+  $('#ulimit').value = '';
+  userPost('/api/users/traffic', {name: curUser, limit: '0'}, e.target, '已取消流量限制');
+};
+
 // ---- 入站（只读） ----
 function renderInbounds(){
   const box = $('#inbounds');
@@ -685,6 +887,7 @@ async function poll(){
     renderRules();
     renderInbounds();
   }catch(e){}
+  try{ users = await api('/api/users'); renderUsers(); }catch(e){}
   try{ renderJobs(await api('/api/jobs') || []); }catch(e){}
 }
 
