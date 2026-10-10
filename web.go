@@ -389,12 +389,12 @@ textarea.dom{min-height:120px}
     <div class="body">
       <label class="f"><span>名称（可选）</span>
         <input id="rname" type="text" placeholder="比如：奈飞走日本"></label>
-      <div class="f"><span class="lbl">入站（可多选）</span>
+      <div class="f"><span class="lbl">用户（按入站里的用户名匹配，可多选）</span>
         <div class="inchk" id="rins"></div></div>
       <label class="f"><span>目标</span>
         <select id="rexit"></select>
         <div class="hint">fanout 出口没连通时这条规则暂不写进配置，连通后自动生效；已有出站的规则始终生效。</div></label>
-      <label class="chk" style="margin-bottom:14px"><input type="checkbox" id="rall"> 全部流量：不看条件，所选入站的所有流量都走这个目标</label>
+      <label class="chk" style="margin-bottom:14px"><input type="checkbox" id="rall"> 全部流量：不看条件，所选用户的所有流量都走这个目标</label>
       <div id="rconds">
         <label class="f"><span>自定义域名</span>
           <textarea id="rdomains" class="dom" spellcheck="false" placeholder="netflix.com&#10;full:www.example.com&#10;keyword:nflx&#10;regex:^.+\.example\.org$&#10;203.0.113.0/24"></textarea>
@@ -608,15 +608,15 @@ function renderRules(){
   const list = view.rules || [];
   $('#rcount').textContent = list.length ? list.length + ' 条' : '';
   if(!list.length){
-    box.innerHTML = '<div class="empty small">还没有分流规则。新建一条：选入站，填域名或规则集，选出口——只有命中的流量走出口。</div>';
+    box.innerHTML = '<div class="empty small">还没有分流规则。新建一条：选用户，填域名或规则集，选出口——只有命中的流量走出口。</div>';
     return;
   }
   box.innerHTML = list.map((r, i) => {
     const dot = !r.enabled ? 'off' : (r.active ? 'up' : 'failed');
     const tip = !r.enabled ? '已停用' : (r.active ? '生效中' : (stateTip(r) || '不生效'));
-    const miss = new Set(r.missing_inbounds || []);
-    const ins = (r.inbounds || []).map(t => '<span class="chip static' + (miss.has(t) ? ' miss' : '') + '"'
-      + (miss.has(t) ? ' title="配置目录里已经没有这个入站"' : '') + '>' + esc(t) + '</span>').join('');
+    const miss = new Set(r.missing_users || []);
+    const ins = (r.users || []).map(t => '<span class="chip static' + (miss.has(t) ? ' miss' : '') + '"'
+      + (miss.has(t) ? ' title="配置目录里的入站已经没有这个用户"' : '') + '>' + esc(t) + '</span>').join('');
     const name = r.name || ('规则 #' + r.id);
     return '<div class="rule' + (r.enabled ? '' : ' off') + '">'
       + '<span class="dot ' + dot + '" title="' + esc(tip) + '"></span>'
@@ -848,7 +848,8 @@ async function openDetail(id){
 
 function renderDetail(d){
   $('#dtitle').textContent = d.tag + '　:' + d.port;
-  const rules = (view.rules || []).filter(r => (r.inbounds || []).includes(d.tag));
+  const dusers = d.users || [];
+  const rules = (view.rules || []).filter(r => (r.users || []).some(u => dusers.includes(u)));
   const links = d.links || [];
   $('#dbody').innerHTML = '<dl class="kv">'
     + '<dt>协议</dt><dd>' + esc(d.protocol) + '　' + esc(d.network || '')
@@ -898,16 +899,21 @@ function openRule(id){
   $('#rtitle').textContent = r ? '编辑分流规则' : '新建分流规则';
   $('#rname').value = r ? (r.name || '') : '';
 
-  const sel = new Set(r ? r.inbounds : []);
-  const ins = view.inbounds || [];
-  const missing = r ? (r.missing_inbounds || []) : [];
-  $('#rins').innerHTML = (ins.length || missing.length)
-    ? ins.map(i => '<label class="chk"><input type="checkbox" value="' + esc(i.tag) + '"'
-        + (sel.has(i.tag) ? ' checked' : '') + '> ' + esc(i.tag)
-        + ' <span class="dim">' + esc(i.protocol) + ' :' + i.port + '</span></label>').join('')
-      + missing.map(t => '<label class="chk" title="配置目录里已经没有这个入站，保存时会去掉">'
+  // 所有入站里的用户名（去重），后面标出它在哪些入站里
+  const sel = new Set(r ? (r.users || []) : []);
+  const umap = new Map();
+  (view.inbounds || []).forEach(i => (i.users || []).forEach(u => {
+    if(!umap.has(u)) umap.set(u, []);
+    umap.get(u).push(i.tag);
+  }));
+  const missing = r ? (r.missing_users || []) : [];
+  $('#rins').innerHTML = (umap.size || missing.length)
+    ? Array.from(umap.entries()).map(([u, tags]) => '<label class="chk"><input type="checkbox" value="' + esc(u) + '"'
+        + (sel.has(u) ? ' checked' : '') + '> ' + esc(u)
+        + ' <span class="dim">' + esc(tags.join(', ')) + '</span></label>').join('')
+      + missing.map(t => '<label class="chk" title="配置目录里的入站已经没有这个用户，保存时会去掉">'
         + '<input type="checkbox" disabled> <s>' + esc(t) + '</s></label>').join('')
-    : '<span class="dim">配置目录里还没有入站</span>';
+    : '<span class="dim">配置目录里的入站还没有用户</span>';
 
   // 目标：fanout 的出口，或配置目录里已有的出站 / 端点。value 带前缀区分两类
   const exits = view.exits || [];
@@ -962,7 +968,7 @@ $('#rsave').onclick = async e => {
     id: curRule ? curRule.id : 0,
     name: $('#rname').value.trim(),
     enabled: $('#renabled').checked,
-    inbounds: Array.from(document.querySelectorAll('#rins input:checked:not(:disabled)')).map(x => x.value),
+    users: Array.from(document.querySelectorAll('#rins input:checked:not(:disabled)')).map(x => x.value),
     exit: $('#rexit').value.startsWith('exit:') ? $('#rexit').value.slice(5) : '',
     outbound: $('#rexit').value.startsWith('out:') ? $('#rexit').value.slice(4) : '',
     all: all,
