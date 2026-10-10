@@ -40,8 +40,8 @@ type RuleView struct {
 	ExitLabel string `json:"exit_label"`
 	// ExitState: up 已连通（已有出站：存在）/ down 隧道在但没连通 / gone 出口已停掉（已有出站：不存在了）
 	ExitState string `json:"exit_state"`
-	// MissingInbounds 是规则里引用了、但配置目录里已经没有的入站
-	MissingInbounds []string `json:"missing_inbounds,omitempty"`
+	// MissingUsers 是规则里引用了、但配置目录里的入站已经没有的用户名
+	MissingUsers []string `json:"missing_users,omitempty"`
 	// MissingRuleSets 是规则里引用了、但配置目录里已经没有的已有规则集
 	MissingRuleSets []string `json:"missing_rule_sets,omitempty"`
 	// Active 表示这条规则此刻真的写进了 sing-box 配置
@@ -157,7 +157,9 @@ func ruleViews(rules []RouteRule, exits []Exit, byHost map[string]int, inbounds 
 	outbounds []ForeignOutbound, ruleSets []ForeignRuleSet) []RuleView {
 	have := map[string]bool{}
 	for _, ib := range inbounds {
-		have[ib.Tag] = true
+		for _, u := range ib.Users {
+			have[u] = true
+		}
 	}
 	outs := map[string]ForeignOutbound{}
 	for _, o := range outbounds {
@@ -196,11 +198,11 @@ func ruleViews(rules []RouteRule, exits []Exit, byHost map[string]int, inbounds 
 		}
 		hasCond := r.All || len(r.Domains) > 0 || len(r.RuleSets) > 0 || live > 0
 		present := 0
-		for _, t := range r.Inbounds {
+		for _, t := range r.Users {
 			if have[t] {
 				present++
 			} else {
-				rv.MissingInbounds = append(rv.MissingInbounds, t)
+				rv.MissingUsers = append(rv.MissingUsers, t)
 			}
 		}
 		rv.Active = r.Enabled && rv.ExitState == "up" && present > 0 && hasCond
