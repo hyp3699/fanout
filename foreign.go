@@ -44,7 +44,8 @@ type foreignConf struct {
 
 // unroutableTypes 是不能当路由目标的出站类型：block / dns 是 1.11 之前的特殊出站
 // （新版用 reject / hijack-dns 动作代替），把流量送过去不是"分流"。
-var unroutableTypes = map[string]bool{"block": true, "dns": true}
+// bandwidth-limiter 是 sb.sh 限速生成的出站（00-limiter.json），由限速规则自动使用，不能手选。
+var unroutableTypes = map[string]bool{"block": true, "dns": true, "bandwidth-limiter": true}
 
 // scanForeign 读取配置目录里除 fanout 自己两个文件之外的所有 .json。
 // 解析不了的文件跳过（sing-box check 会报真正的错）。
@@ -165,7 +166,7 @@ func (fc foreignConf) directTag() string {
 // 第一个出站（端点不算）。没有任何出站时返回空串（sing-box 会自己补一个直连）。
 func (fc foreignConf) defaultOutbound() string {
 	for _, o := range fc.Outbounds {
-		if !o.Endpoint {
+		if !o.Endpoint && !unroutableTypes[o.Type] {
 			return o.Tag
 		}
 	}
