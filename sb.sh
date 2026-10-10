@@ -7145,12 +7145,11 @@ show_limit() {
 }
 
 # ================= 用户限速 (bandwidth-limiter，按用户名 name 匹配) =================
-# 这段代码 sb.sh 与 fanout 的 f.sh 共用，两边读写同一份数据，改动请两边同步。
+# 数据与 fanout 网页面板共用（/etc/sing-box/user_manager），两边改动互相可见。
 SPEED_STORE="/etc/sing-box/user_manager/speed_limits.json"
 SPEED_SYNC_PY="/etc/sing-box/user_manager/speed_limit_sync.py"
 SPEED_DROPIN="/etc/systemd/system/sing-box.service.d/10-speed-limit.conf"
 SPEED_CONF_DIR="/etc/sing-box/conf"
-SPEED_TRAFFIC_DIR="/etc/sing-box/user_manager/traffic"
 SPEED_PY="$(command -v python3 2>/dev/null || true)"
 
 speed_limit_write_sync_py() {
@@ -7299,15 +7298,16 @@ speed_limit_to_bps() {
         printf "%d", v }'
 }
 
-# 字节/秒 → "1.00 MB/s（8.0 Mbps）"
+# 字节/秒 → "1 MB/s（实际网速 8 Mbps）"
 speed_rate_text() {
-    awk -v b="${1:-0}" 'BEGIN{
-        if (b >= 1000000) s = sprintf("%.2f MB/s", b / 1000000)
-        else if (b >= 1000) s = sprintf("%.1f KB/s", b / 1000)
+    awk -v b="${1:-0}" 'function t(v){ v = sprintf("%.2f", v); sub(/0+$/, "", v); sub(/\.$/, "", v); return v }
+    BEGIN{
+        if (b >= 1000000) s = t(b / 1000000) " MB/s"
+        else if (b >= 1000) s = t(b / 1000) " KB/s"
         else s = sprintf("%d B/s", b)
         m = b * 8 / 1000000
-        if (m >= 10) t = sprintf("%.0f Mbps", m); else if (m >= 0.1) t = sprintf("%.1f Mbps", m); else t = sprintf("%.0f Kbps", b * 8 / 1000)
-        printf "%s（%s）", s, t }'
+        if (m >= 1) r = t(m) " Mbps"; else r = t(b * 8 / 1000) " Kbps"
+        printf "%s（实际网速 %s）", s, r }'
 }
 
 speed_limit_text() {
@@ -7334,33 +7334,6 @@ show_speed_limit() {
     else
         echo -e "当前限速：\e[1;33m${text}\033[0m"
     fi
-}
-
-# 读取用户累计流量（v2ray_api 统计），输出 "上传 下载"
-speed_user_counters() {
-    local g="$SPEED_TRAFFIC_DIR/grpcurl"
-    [ -x "$g" ] && [ -f "$SPEED_TRAFFIC_DIR/stats.proto" ] || return 1
-    local out
-    out=$("$g" -plaintext -max-time 3 -import-path "$SPEED_TRAFFIC_DIR" -proto "$SPEED_TRAFFIC_DIR/stats.proto" \
-        -d "$(jq -nc --arg p "user>>>$1>>>traffic>>>" '{pattern:$p,reset:false}')" \
-        127.0.0.1:9094 v2ray.core.app.stats.command.StatsService/QueryStats 2>/dev/null) || return 1
-    echo "$out" | jq -r '(.stat // []) as $s
-        | [([$s[] | select(.name | endswith(">>>uplink")) | (.value // "0" | tonumber)] | add // 0),
-           ([$s[] | select(.name | endswith(">>>downlink")) | (.value // "0" | tonumber)] | add // 0)] | @tsv' 2>/dev/null
-}
-
-# 实时网速：间隔 2 秒取两次统计
-show_live_speed() {
-    local a b u1 d1 u2 d2
-    a="$(speed_user_counters "$1")" || { echo "实时网速：未统计"; return; }
-    sleep 2
-    b="$(speed_user_counters "$1")" || { echo "实时网速：未统计"; return; }
-    read -r u1 d1 <<< "$a"
-    read -r u2 d2 <<< "$b"
-    local up=$(( (${u2:-0} - ${u1:-0}) / 2 )) down=$(( (${d2:-0} - ${d1:-0}) / 2 ))
-    [ "$up" -lt 0 ] && up=0
-    [ "$down" -lt 0 ] && down=0
-    echo -e "实时网速：上传 \e[1;36m$(speed_rate_text "$up")\033[0m  下载 \e[1;36m$(speed_rate_text "$down")\033[0m"
 }
 
 # 统计该用户名已有的分流规则数量
@@ -7467,7 +7440,6 @@ speed_limit_menu() {
         echo
         echo -e "\e[1;32m用户：${name}\033[0m"
         show_speed_limit "$name"
-        show_live_speed "$name"
         rule_count="$(speed_limit_rule_count "$name" 2>/dev/null)"
         [[ "$rule_count" =~ ^[0-9]+$ ]] || rule_count=0
         if [ "$rule_count" -gt 0 ]; then
@@ -7479,7 +7451,6 @@ speed_limit_menu() {
         echo -e "\e[1;32m1. 设置限速\033[0m"
         echo -e "\e[1;32m2. 修改限速\033[0m"
         echo -e "\e[1;91m3. 取消限速\033[0m"
-        echo -e "\e[1;32m4. 刷新实时网速\033[0m"
         echo
         echo -e "\e[1;32m------------------------------------------\033[0m"
         echo -e "\e[1;32m0. 返回\033[0m"
@@ -7516,7 +7487,6 @@ speed_limit_menu() {
                     sleep 1.5
                 fi
                 ;;
-            4) continue ;;
             0) return ;;
             *) echo -e "\e[1;91m无效选项\033[0m"; sleep 1 ;;
         esac
