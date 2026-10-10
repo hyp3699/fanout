@@ -477,6 +477,9 @@ func (r *singboxRunner) reapOrphan() {
 	_ = os.Remove(r.pidPath())
 }
 
+// limiterFile 是 sb.sh 生成的限速配置，内部路由会复制 fanout 的分流规则。
+const limiterFile = "00-limiter.json"
+
 // warnShadowingRoutes 提醒排在 fanout-route.json 前面、且带路由规则的外部文件。
 //
 // sing-box 按文件名排序合并，rules 数组按顺序追加、先匹配先生效。
@@ -490,6 +493,10 @@ func warnShadowingRoutes(dir string) {
 	for _, e := range entries {
 		name := e.Name()
 		if e.IsDir() || !strings.HasSuffix(name, ".json") || isManagedFile(name) || name >= fanoutRouteFile {
+			continue
+		}
+		// sb.sh 的限速文件：限速用户进入限速出站后，会在里面按 fanout 的规则继续分流，不算抢先
+		if name == limiterFile {
 			continue
 		}
 		blob, err := os.ReadFile(filepath.Join(dir, name))
