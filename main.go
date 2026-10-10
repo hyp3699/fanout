@@ -594,7 +594,7 @@ func apiRules(m *Manager) http.HandlerFunc {
 
 // apiRuleSave 新建（id 为 0 或不传）或修改一条分流规则。请求体是 JSON：
 //
-//	{"id":0,"name":"奈飞","enabled":true,"inbounds":["anytls-1"],"exit":"<节点主机名>",
+//	{"id":0,"name":"奈飞","enabled":true,"users":["anytls-user1"],"exit":"<节点主机名>",
 //	 "domains":"netflix.com\nfull:www.example.com","rule_sets":[{"source":"geosite:netflix"}],
 //	 "local_rule_sets":["geosite-openai"],"all":false,"resolve_ip":false}
 //
