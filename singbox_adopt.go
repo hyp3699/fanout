@@ -23,6 +23,8 @@ type adoptedInbound struct {
 	Port int
 	File string // 来源文件名
 	Raw  map[string]any
+	// Users 是入站里的用户名（users[].name / users[].username），分流规则按它匹配（auth_user）
+	Users []string
 
 	// ID 是界面用的编号，来自 nativeStore.Adopted
 	ID int
@@ -60,15 +62,36 @@ func scanAdopted(dir string) []*adoptedInbound {
 				continue
 			}
 			out = append(out, &adoptedInbound{
-				Tag:  tag,
-				Type: str(ib["type"]),
-				Port: num(ib["listen_port"]),
-				File: name,
-				Raw:  ib,
+				Tag:   tag,
+				Type:  str(ib["type"]),
+				Port:  num(ib["listen_port"]),
+				File:  name,
+				Raw:   ib,
+				Users: inboundUserNames(ib),
 			})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Port < out[j].Port })
+	return out
+}
+
+// inboundUserNames 取入站 users 里的用户名，sing-box 的 auth_user 就是按它匹配的。
+func inboundUserNames(ib map[string]any) []string {
+	var out []string
+	seen := map[string]bool{}
+	users, _ := ib["users"].([]any)
+	for _, u := range users {
+		m := obj(u)
+		name := str(m["name"])
+		if name == "" {
+			name = str(m["username"])
+		}
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
 	return out
 }
 
