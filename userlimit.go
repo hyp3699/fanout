@@ -10,6 +10,7 @@ package main
 // 两边读写同一份文件，网页上改了 sb.sh 里立刻能看到，反之亦然。
 
 import (
+	"bytes"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -260,23 +261,53 @@ func trafficReady() bool {
 
 var speedReadyCache struct {
 	sync.Mutex
-	at  time.Time
+	key string
 	val bool
 }
 
-// speedReady 看 sing-box 内核里有没有 bandwidth-limiter（二进制里搜类型名，结果缓存一分钟）。
+// speedReady 看 sing-box 内核里有没有 bandwidth-limiter：分块扫描二进制里的类型名
+// （不整个读进内存，小内存机器上几十 MB 的二进制会把进程撑爆），按文件大小和修改时间缓存。
 func speedReady() bool {
+	fi, err := os.Stat(singbox.Bin)
+	if err != nil {
+		return false
+	}
+	key := fmt.Sprintf("%d-%d", fi.Size(), fi.ModTime().UnixNano())
 	speedReadyCache.Lock()
 	defer speedReadyCache.Unlock()
-	if time.Since(speedReadyCache.at) < time.Minute {
+	if speedReadyCache.key == key {
 		return speedReadyCache.val
 	}
-	ok := false
-	if b, err := os.ReadFile(singbox.Bin); err == nil {
-		ok = strings.Contains(string(b), "bandwidth-limiter")
-	}
-	speedReadyCache.at, speedReadyCache.val = time.Now(), ok
+	ok := fileContains(singbox.Bin, []byte("bandwidth-limiter"))
+	speedReadyCache.key, speedReadyCache.val = key, ok
 	return ok
+}
+
+func fileContains(path string, needle []byte) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	buf := make([]byte, 256*1024+len(needle))
+	keep := 0
+	for {
+		n, err := f.Read(buf[keep:])
+		if n > 0 {
+			chunk := buf[:keep+n]
+			if bytes.Contains(chunk, needle) {
+				return true
+			}
+			keep = len(needle) - 1
+			if keep > len(chunk) {
+				keep = len(chunk)
+			}
+			copy(buf, chunk[len(chunk)-keep:])
+		}
+		if err != nil {
+			return false
+		}
+	}
 }
 
 // countUserRules 统计各用户名在配置目录里（不含 00-limiter.json）的分流规则条数。
@@ -598,9 +629,9 @@ func setUserTraffic(name, input, period string) error {
 	if unit == "" {
 		unit = "GB"
 	}
-	bytes := int64(num * 1024 * 1024)
+	limitBytes := int64(num * 1024 * 1024)
 	if unit == "GB" {
-		bytes = int64(num * 1024 * 1024 * 1024)
+		limitBytes = int64(num * 1024 * 1024 * 1024)
 	}
 	oldPeriod := str(data["period"])
 	if oldPeriod == "" {
@@ -617,7 +648,7 @@ func setUserTraffic(name, input, period string) error {
 		"user":              name,
 		"limit_value":       num,
 		"limit_unit":        unit,
-		"limit_bytes":       bytes,
+		"limit_bytes":       limitBytes,
 		"period":            period,
 		"period_start":      start,
 		"period_end":        end,
