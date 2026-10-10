@@ -20,11 +20,11 @@ import (
 
 // 分流规则。
 //
-// 一条规则 = 若干个入站（按 sing-box tag）+ 匹配条件 → 一个目标。
+// 一条规则 = 若干个用户（入站里的用户名，sing-box auth_user）+ 匹配条件 → 一个目标。
 // 目标是 fanout 的出口（fanout-exit-*），或者配置目录里已有的出站 / 端点（direct、warp 等）。
 // 条件是"自定义域名"和"规则集"两类，命中任意一条就走目标：
 //
-//	入站匹配 && (任一域名 || 任一规则集)
+//	用户匹配 && (任一域名 || 任一规则集)
 //
 // 规则集可以是 geosite:/geoip: 简写、远程地址（fanout 自己定义 fanout-rs-*），
 // 也可以直接引用配置目录里已有的 route.rule_set tag（不重复定义）。
@@ -37,8 +37,10 @@ type RouteRule struct {
 	ID      int    `json:"id"`
 	Name    string `json:"name,omitempty"`
 	Enabled bool   `json:"enabled"`
-	// Inbounds 是入站 tag 列表（配置目录里已有的入站）
-	Inbounds []string `json:"inbounds"`
+	// Users 是用户名列表（配置目录里入站的 users[].name），生成 auth_user
+	Users []string `json:"users"`
+	// Inbounds 是老版本按入站 tag 匹配留下的字段，只在加载时迁移成 Users，不再写回
+	Inbounds []string `json:"inbounds,omitempty"`
 	// Exit 是出口节点主机名经 sanitizeTag 后的形式，对应出站 fanout-exit-<Exit>。
 	// 与 Outbound 二选一。
 	Exit string `json:"exit"`
@@ -75,7 +77,7 @@ type RuleInput struct {
 	ID       int          `json:"id"`
 	Name     string       `json:"name"`
 	Enabled  *bool        `json:"enabled"`
-	Inbounds []string     `json:"inbounds"`
+	Users    []string     `json:"users"`
 	Exit     string       `json:"exit"`     // 出口的节点主机名；与 Outbound 二选一
 	Outbound string       `json:"outbound"` // 已有出站 / 端点的 tag；与 Exit 二选一
 	Domains  string       `json:"domains"`  // 文本框原文：一行一个，也容忍逗号和空格
@@ -379,7 +381,7 @@ func ruleHash(s string) string {
 
 // ruleEnv 是校验规则时可选的东西。
 type ruleEnv struct {
-	Inbounds  map[string]bool // 配置目录里现有的入站 tag
+	Users     map[string]bool // 配置目录里入站中现有的用户名
 	Exits     map[string]bool // fanout 的出口（sanitizeTag 后的主机名）
 	Outbounds map[string]bool // 配置目录里已有的、能当目标的出站 / 端点 tag
 	RuleSets  map[string]bool // 配置目录里已有的规则集 tag
@@ -402,19 +404,19 @@ func normalizeRule(in RuleInput, env ruleEnv, prev *RouteRule) (*RouteRule, erro
 	}
 
 	seen := map[string]bool{}
-	for _, tag := range in.Inbounds {
-		tag = strings.TrimSpace(tag)
-		if tag == "" || seen[tag] {
+	for _, name := range in.Users {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
 			continue
 		}
-		if !env.Inbounds[tag] {
-			return nil, fmt.Errorf("入站 %s 不存在（fanout 只能使用配置目录里已有的入站）", tag)
+		if !env.Users[name] && (prev == nil || !strIn(prev.Users, name)) {
+			return nil, fmt.Errorf("用户 %s 不存在（只能选配置目录里入站中已有的用户名）", name)
 		}
-		seen[tag] = true
-		r.Inbounds = append(r.Inbounds, tag)
+		seen[name] = true
+		r.Users = append(r.Users, name)
 	}
-	if len(r.Inbounds) == 0 {
-		return nil, fmt.Errorf("至少选一个入站")
+	if len(r.Users) == 0 {
+		return nil, fmt.Errorf("至少选一个用户")
 	}
 
 	exit, outbound := strings.TrimSpace(in.Exit), strings.TrimSpace(in.Outbound)
@@ -520,6 +522,8 @@ func (r *RouteRule) needsResolve() bool {
 
 // buildOptions 是生成路由时依赖的环境信息。
 type buildOptions struct {
+	// InboundUsers 是入站 tag -> 用户名，老规则（按入站 tag）靠它展开成用户名
+	InboundUsers map[string][]string
 	// RuleSetDir 存放 fanout 预先下载好的规则集文件，存在时写进 initial_path，
 	// sing-box 启动时下载不到也能用它起来。空表示不写。
 	RuleSetDir string
@@ -536,14 +540,14 @@ type buildOptions struct {
 
 // buildRouteRules 由分流规则生成 route.rules 与 route.rule_set。
 //
-// live 是连通出口：sanitizeTag(主机名) -> 出站 tag。existing 是配置目录里现有的入站 tag。
-// 出口没连通、禁用、入站全不在了的规则直接跳过（流量保持原走向），保证配置一定能过 check。
+// live 是连通出口：sanitizeTag(主机名) -> 出站 tag。existing 是配置目录里入站中现有的用户名。
+// 出口没连通、禁用、用户全不在了的规则直接跳过（流量保持原走向），保证配置一定能过 check。
 // 目标是已有出站的规则不看隧道，始终生效；已有出站或引用的已有规则集在配置目录里不见了时，
 // 跳过（或去掉那个规则集）并记日志。
 func buildRouteRules(rules []*RouteRule, live map[string]string, existing map[string]bool, opts buildOptions) (outRules []any, outSets []any) {
 	type activeRule struct {
 		r        *RouteRule
-		inbounds []any
+		users    []any
 		outbound string
 		sets     []resolvedRuleSet
 		// local 是引用的已有规则集；localIP 是其中需要解析后再匹配一遍的
@@ -584,7 +588,7 @@ func buildRouteRules(rules []*RouteRule, live map[string]string, existing map[st
 			outbound = o
 		}
 		var tags []string
-		for _, t := range r.Inbounds {
+		for _, t := range ruleUsers(r, opts.InboundUsers) {
 			if existing[t] {
 				tags = append(tags, t)
 			}
@@ -592,7 +596,7 @@ func buildRouteRules(rules []*RouteRule, live map[string]string, existing map[st
 		if len(tags) == 0 {
 			continue
 		}
-		a := activeRule{r: r, inbounds: toAnySlice(tags), outbound: outbound}
+		a := activeRule{r: r, users: toAnySlice(tags), outbound: outbound}
 		if !r.All {
 			for _, t := range r.LocalRuleSets {
 				frs, ok := opts.Foreign.ruleSet(t)
@@ -644,11 +648,11 @@ func buildRouteRules(rules []*RouteRule, live map[string]string, existing map[st
 	// 域名匹配要靠嗅探拿到 SNI / Host。sing-box 1.11 起嗅探是路由动作，
 	// 对已经嗅探过的连接再嗅一次没有副作用，也不改目标地址，不影响第三方的规则。
 	if len(sniff) > 0 {
-		outRules = append(outRules, map[string]any{"inbound": toAnySlice(sniff), "action": "sniff"})
+		outRules = append(outRules, map[string]any{"auth_user": toAnySlice(sniff), "action": "sniff"})
 	}
 	for _, a := range active {
 		route := func(m map[string]any) map[string]any {
-			m["inbound"] = a.inbounds
+			m["auth_user"] = a.users
 			m["action"] = "route"
 			m["outbound"] = a.outbound
 			return m
@@ -684,7 +688,7 @@ func buildRouteRules(rules []*RouteRule, live map[string]string, existing map[st
 		if a.r.needsResolve() || len(a.localIP) > 0 {
 			// 目标是域名时 IP 类条件（ip_cidr、geoip）匹配不到，先解析再匹配一遍。
 			// 解析只作用于这些入站里前面没命中的流量；prefer_ipv4 照顾隧道里没有 IPv6。
-			outRules = append(outRules, map[string]any{"inbound": a.inbounds, "action": "resolve", "strategy": "prefer_ipv4"})
+			outRules = append(outRules, map[string]any{"auth_user": a.users, "action": "resolve", "strategy": "prefer_ipv4"})
 			if cidr := fields["ip_cidr"]; len(cidr) > 0 {
 				outRules = append(outRules, route(map[string]any{"ip_cidr": toAnySlice(cidr)}))
 			}
@@ -694,6 +698,33 @@ func buildRouteRules(rules []*RouteRule, live map[string]string, existing map[st
 		}
 	}
 	return outRules, setDefs
+}
+
+// ruleUsers 返回规则的用户名；老规则只有入站 tag 时，展开成那些入站里的全部用户。
+func ruleUsers(r *RouteRule, inboundUsers map[string][]string) []string {
+	if len(r.Users) > 0 || len(r.Inbounds) == 0 {
+		return r.Users
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, tag := range r.Inbounds {
+		for _, u := range inboundUsers[tag] {
+			if !seen[u] {
+				seen[u] = true
+				out = append(out, u)
+			}
+		}
+	}
+	return out
+}
+
+func strIn(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
 
 func ruleName(r *RouteRule) string {
