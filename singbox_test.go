@@ -208,14 +208,14 @@ func TestNativeExistingTargets(t *testing.T) {
 	defer n.Close()
 
 	// 没有任何出口
-	if _, err := n.SaveRule(RuleInput{Name: "国内直连", Inbounds: []string{"anytls-1"}, Outbound: "direct",
+	if _, err := n.SaveRule(RuleInput{Name: "国内直连", Users: []string{"u1", "u2"}, Outbound: "direct",
 		LocalRuleSets: []string{"geosite-cn"}}, nil); err != nil {
 		t.Fatalf("指向已有出站的规则保存失败: %v", err)
 	}
-	if _, err := n.SaveRule(RuleInput{Inbounds: []string{"anytls-1"}, Outbound: "nope", Domains: "a.com"}, nil); err == nil {
+	if _, err := n.SaveRule(RuleInput{Users: []string{"u1", "u2"}, Outbound: "nope", Domains: "a.com"}, nil); err == nil {
 		t.Error("不存在的已有出站应当拒绝")
 	}
-	if _, err := n.SaveRule(RuleInput{Inbounds: []string{"anytls-1"}, Outbound: "direct", LocalRuleSets: []string{"nope"}}, nil); err == nil {
+	if _, err := n.SaveRule(RuleInput{Users: []string{"u1", "u2"}, Outbound: "direct", LocalRuleSets: []string{"nope"}}, nil); err == nil {
 		t.Error("不存在的已有规则集应当拒绝")
 	}
 	rules, sets, raw := readRoute(t, conf)
@@ -372,24 +372,24 @@ func TestNativeRulesApplyAndRollBack(t *testing.T) {
 	tunnels := []*Tunnel{up, down}
 
 	// 没有条件、也没勾全部流量：必须拒绝，不能退化成整条入站转发
-	if _, err := n.SaveRule(RuleInput{Inbounds: []string{"anytls-1"}, Exit: "jp-home"}, tunnels); err == nil {
+	if _, err := n.SaveRule(RuleInput{Users: []string{"u1", "u2"}, Exit: "jp-home"}, tunnels); err == nil {
 		t.Fatal("空条件规则应当被拒绝")
 	}
 	// 不存在的入站 / 出口
-	if _, err := n.SaveRule(RuleInput{Inbounds: []string{"nope"}, Exit: "jp-home", Domains: "a.com"}, tunnels); err == nil {
+	if _, err := n.SaveRule(RuleInput{Users: []string{"nope"}, Exit: "jp-home", Domains: "a.com"}, tunnels); err == nil {
 		t.Error("引用不存在的入站应当被拒绝")
 	}
-	if _, err := n.SaveRule(RuleInput{Inbounds: []string{"anytls-1"}, Exit: "kr-x", Domains: "a.com"}, tunnels); err == nil {
+	if _, err := n.SaveRule(RuleInput{Users: []string{"u1", "u2"}, Exit: "kr-x", Domains: "a.com"}, tunnels); err == nil {
 		t.Error("引用不存在的出口应当被拒绝")
 	}
 	// 规则集下载失败当场报错，不写配置
-	if _, err := n.SaveRule(RuleInput{Inbounds: []string{"anytls-1"}, Exit: "jp-home",
+	if _, err := n.SaveRule(RuleInput{Users: []string{"u1", "u2"}, Exit: "jp-home",
 		RuleSets: []RuleSetRef{{Source: "geosite:nosuch"}}}, tunnels); err == nil {
 		t.Error("规则集下载失败应当报错")
 	}
 
 	r1, err := n.SaveRule(RuleInput{
-		Name: "奈飞", Inbounds: []string{"anytls-1", "tuic-1"}, Exit: "jp-home",
+		Name: "奈飞", Users: []string{"u1", "u2"}, Exit: "jp-home",
 		Domains:  "netflix.com, nflxvideo.net\nfull:www.example.com keyword:nflx",
 		RuleSets: []RuleSetRef{{Source: "geosite:netflix"}},
 	}, tunnels)
@@ -397,7 +397,7 @@ func TestNativeRulesApplyAndRollBack(t *testing.T) {
 		t.Fatalf("保存规则失败: %v", err)
 	}
 	// 指向没连通出口的规则：保存成功，但不写进配置
-	if _, err := n.SaveRule(RuleInput{Inbounds: []string{"anytls-1"}, Exit: "us-home", Domains: "hulu.com"}, tunnels); err != nil {
+	if _, err := n.SaveRule(RuleInput{Users: []string{"u1", "u2"}, Exit: "us-home", Domains: "hulu.com"}, tunnels); err != nil {
 		t.Fatalf("保存指向未连通出口的规则失败: %v", err)
 	}
 
@@ -405,7 +405,7 @@ func TestNativeRulesApplyAndRollBack(t *testing.T) {
 	if len(rules) != 3 {
 		t.Fatalf("应当是 sniff + 域名规则 + 规则集规则，实际 %d 条: %s", len(rules), raw)
 	}
-	if rules[0]["action"] != "sniff" || strings.Join(toStrings(rules[0]["inbound"]), ",") != "anytls-1,tuic-1" {
+	if rules[0]["action"] != "sniff" || strings.Join(toStrings(rules[0]["auth_user"]), ",") != "u1,u2" {
 		t.Errorf("第一条应当是这些入站的 sniff: %v", rules[0])
 	}
 	if rules[1]["outbound"] != "fanout-exit-jp-home" || rules[1]["action"] != "route" ||
@@ -483,7 +483,7 @@ func TestNativeRulesApplyAndRollBack(t *testing.T) {
 
 	// 校验失败要回滚：正则保留大小写，塞进 BAD 让假 sing-box check 不过
 	prevRoute, _ := os.ReadFile(filepath.Join(conf, fanoutRouteFile))
-	if _, err := n.SaveRule(RuleInput{Inbounds: []string{"tuic-1"}, Exit: "jp-other", Domains: "regex:BAD"}, tunnels); err == nil {
+	if _, err := n.SaveRule(RuleInput{Users: []string{"u1"}, Exit: "jp-other", Domains: "regex:BAD"}, tunnels); err == nil {
 		t.Fatal("check 失败时保存应当报错")
 	}
 	nowRoute, _ := os.ReadFile(filepath.Join(conf, fanoutRouteFile))
@@ -635,15 +635,15 @@ func TestRealSingBoxCheck(t *testing.T) {
 	}
 
 	in := []RuleInput{
-		{Name: "奈飞", Inbounds: []string{"anytls-1", "tuic-1"}, Exit: "jp",
+		{Name: "奈飞", Users: []string{"u1", "u2"}, Exit: "jp",
 			Domains: "netflix.com\nfull:www.example.com\nkeyword:nflx\nregex:^.+\\.nflximg\\.net$", RuleSets: []RuleSetRef{{Source: "geosite:netflix"}}},
-		{Name: "日本 IP", Inbounds: []string{"anytls-1"}, Exit: "jp", Domains: "203.0.113.0/24", RuleSets: []RuleSetRef{{Source: "geoip:jp"}}},
-		{Name: "老入站整条", Inbounds: []string{"fanout-in-20000-tcp"}, Exit: "jp", All: true},
-		{Name: "国内直连", Inbounds: []string{"anytls-1", "tuic-1"}, Outbound: "direct", LocalRuleSets: []string{"my-cn"}},
-		{Name: "走 warp", Inbounds: []string{"anytls-1"}, Outbound: "warp-40000", Domains: "openai.com"},
+		{Name: "日本 IP", Users: []string{"u1", "u2"}, Exit: "jp", Domains: "203.0.113.0/24", RuleSets: []RuleSetRef{{Source: "geoip:jp"}}},
+		{Name: "老入站整条", Users: []string{"v"}, Exit: "jp", All: true},
+		{Name: "国内直连", Users: []string{"u1", "u2"}, Outbound: "direct", LocalRuleSets: []string{"my-cn"}},
+		{Name: "走 warp", Users: []string{"u1", "u2"}, Outbound: "warp-40000", Domains: "openai.com"},
 	}
 	fc := scanForeign(conf)
-	env := ruleEnv{Inbounds: map[string]bool{"anytls-1": true, "tuic-1": true, "fanout-in-20000-tcp": true},
+	env := ruleEnv{Users: map[string]bool{"u1": true, "u2": true, "v": true},
 		Exits: map[string]bool{"jp": true}, Outbounds: fc.outboundTags(), RuleSets: fc.ruleSetTags()}
 	var rules []*RouteRule
 	rsDir := t.TempDir()
