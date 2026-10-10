@@ -55,7 +55,9 @@ type Inbound struct {
 	Protocol string `json:"protocol"`
 	Tag      string `json:"tag"`    // sing-box 里的入站 tag，规则按它引用
 	Source   string `json:"source"` // 来源文件名
-	Rules    int    `json:"rules"`  // 引用它的分流规则条数
+	Rules    int    `json:"rules"`  // 引用它的用户的分流规则条数
+	// Users 是入站里的用户名，分流规则按用户名匹配
+	Users []string `json:"users"`
 }
 
 // InboundDetail 是某个入站的完整信息，含客户端与分享链接。
