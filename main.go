@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // version 由构建时通过 -ldflags 注入。
@@ -103,6 +104,14 @@ func main() {
 	go func() {
 		<-stop
 		log.Println("正在清理所有隧道...")
+		// 清理有上限：停服务时如果正好在 systemctl reload sing-box，systemd 会让那个
+		// reload 排在 fanout 停止之后，两边互等到 TimeoutStopSec 被 SIGKILL（更新时卡 30 秒）。
+		go func() {
+			time.Sleep(10 * time.Second)
+			log.Println("清理超时，直接退出")
+			unlock()
+			os.Exit(0)
+		}()
 		mgr.Shutdown()
 		closePanel()
 		unlock() // os.Exit 会绕过 defer，这里手动放锁
