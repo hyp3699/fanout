@@ -182,7 +182,7 @@ func ruleViews(rules []RouteRule, exits []Exit, byHost map[string]int, inbounds 
 			}
 		} else if i, ok := byHost[r.Exit]; ok {
 			e := exits[i]
-			rv.ExitHost, rv.ExitLabel = e.Host, e.Label
+			rv.ExitHost, rv.ExitLabel = e.Host, ruleExitLabel(e)
 			rv.ExitState = "down"
 			if e.Status == "up" {
 				rv.ExitState = "up"
@@ -209,4 +209,17 @@ func ruleViews(rules []RouteRule, exits []Exit, byHost map[string]int, inbounds 
 		out = append(out, rv)
 	}
 	return out
+}
+
+// ruleExitLabel 是分流规则里显示的出口名：优先用实际出口 IP。
+// VPN Gate 节点的服务器 IP 和实际出网 IP 常常不同，换节点后出口 IP 也会变，
+// 规则里显示出口 IP 才能和出口列表对得上。
+func ruleExitLabel(e Exit) string {
+	if e.ExitIP == "" {
+		return e.Label
+	}
+	if e.Country == "" {
+		return e.ExitIP
+	}
+	return e.Country + " " + e.ExitIP
 }
