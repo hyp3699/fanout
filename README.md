@@ -15,14 +15,16 @@ fanout 不建入站：入站由同机别的脚本（比如 sb.sh）管理，fano
 
 ![出口验证](https://images.joeyblog.net/2026/7/26/fanout-6-exit-ip.png)
 
-## 用户流量限制 / 限速
+## 用户限速 / 流量限制
 
-`f` 菜单 `14) 用户流量限制 / 限速`（或 `f limit`）列出所有入站里的用户名，每个用户可以：
+网页面板的「用户」一栏列出所有入站里的用户名（到量被停用的也在），点编辑可以：
 
-- **流量限制**：调用 sb.sh 的 `sing-box-name.sh`，由 `singbox-traffic` 服务统计和停用；
-- **限速管理**：设置 / 修改 / 取消限速，显示当前限速（MB/s 与 Mbps）和实时网速。
+- **限速**：单位 MB/s，填 `1` 就是 1 MB/s，实际网速 8 Mbps（界面直接显示换算结果）；
+  也可以写 `500KB`、`100Mbps`，可选上传+下载 / 仅上传 / 仅下载；
+- **流量限制**：`2` = 2GB，也可以写 `500MB`，可选每天 / 每月 / 不重置，到量由流量统计服务自动停用。
 
 数据与 sb.sh 完全共用（`/etc/sing-box/user_manager/`），两边改哪边都一样。
+流量限制需要 sb.sh 装的 `singbox-traffic` 流量统计服务；
 限速需要带 `bandwidth-limiter` 的内核（`hyp3699/sssssssssssiiii` 的 `-xhttp-limiter` 版本），
 生成 `00-limiter.json`：限速用户先进限速出站，再在里面按原有全部分流规则（含 fanout 的规则）出站，
 所以同一用户的限速和分流同时生效。sing-box 每次启动 / 重载都会自动同步。
