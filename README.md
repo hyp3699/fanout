@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 把 VPN Gate 的公共节点变成本地 SOCKS5 端口：一个端口一个出口 IP。
-再按**分流规则**把同机 [sing-box](https://github.com/SagerNet/sing-box) 入站里的部分流量
+再按**分流规则**把同机 [sing-box](https://github.com/SagerNet/sing-box) 入站里指定**用户名**的部分流量
 （指定的域名、geosite / geoip 规则集）送进这些出口，比如只让奈飞走日本家宽，其余照旧直连。
 
 fanout 不建入站：入站由同机别的脚本（比如 sb.sh）管理，fanout 只读取它们、显示分享链接，
@@ -14,6 +14,18 @@ fanout 不建入站：入站由同机别的脚本（比如 sb.sh）管理，fano
 四条隧道跑在一台机器上，四个端口对应四个国家的出口，母机自己的 IP 不受影响：
 
 ![出口验证](https://images.joeyblog.net/2026/7/26/fanout-6-exit-ip.png)
+
+## 用户流量限制 / 限速
+
+`f` 菜单 `14) 用户流量限制 / 限速`（或 `f limit`）列出所有入站里的用户名，每个用户可以：
+
+- **流量限制**：调用 sb.sh 的 `sing-box-name.sh`，由 `singbox-traffic` 服务统计和停用；
+- **限速管理**：设置 / 修改 / 取消限速，显示当前限速（MB/s 与 Mbps）和实时网速。
+
+数据与 sb.sh 完全共用（`/etc/sing-box/user_manager/`），两边改哪边都一样。
+限速需要带 `bandwidth-limiter` 的内核（`hyp3699/sssssssssssiiii` 的 `-xhttp-limiter` 版本），
+生成 `00-limiter.json`：限速用户先进限速出站，再在里面按原有全部分流规则（含 fanout 的规则）出站，
+所以同一用户的限速和分流同时生效。sing-box 每次启动 / 重载都会自动同步。
 
 ## 原理
 
@@ -96,10 +108,12 @@ Operation not permitted 的话，这台机器用不了，跟发行版无关。
 
 ### 分流规则
 
-一条规则 = **一个或多个入站** + **匹配条件** → **一个目标**：
+一条规则 = **一个或多个用户**（入站里的 `users[].name`，生成 `auth_user`，不再用入站 tag）+ **匹配条件** → **一个目标**：
+
+老版本按入站 tag 写的规则，启动时自动换成那些入站里的全部用户名。
 
 ```
-入站匹配 && (任一自定义域名 || 任一规则集) → fanout-exit-<出口> 或 已有出站
+用户匹配 && (任一自定义域名 || 任一规则集) → fanout-exit-<出口> 或 已有出站
 ```
 
 - **目标**：一个下拉框，分两组：
