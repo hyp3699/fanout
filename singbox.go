@@ -113,8 +113,14 @@ func buildFanoutFiles(rules []*RouteRule, existing []*adoptedInbound, tunnels []
 	}
 
 	have := map[string]bool{}
+	if opts.InboundUsers == nil {
+		opts.InboundUsers = map[string][]string{}
+	}
 	for _, a := range existing {
-		have[a.Tag] = true
+		opts.InboundUsers[a.Tag] = a.Users
+		for _, u := range a.Users {
+			have[u] = true
+		}
 	}
 	routeRules, sets := buildRouteRules(rules, liveTags, have, opts)
 	route := map[string]any{"rules": routeRules}
