@@ -203,6 +203,9 @@ func applyUpdate() error {
 		return fmt.Errorf("替换二进制失败: %w", err)
 	}
 
+	// 顺带更新 f 管理菜单（安装时放在 /usr/local/bin/f），否则菜单永远停在旧版
+	updateMenuScript(tarPath, tmp)
+
 	// 让 init 系统重启我们，拉起新版本。异步触发并延迟一下，
 	// 好让这次请求的响应先发回界面。
 	go func() {
@@ -360,4 +363,25 @@ func hasCmd(name string) bool {
 func dirExists(p string) bool {
 	fi, err := os.Stat(p)
 	return err == nil && fi.IsDir()
+}
+
+// menuScriptPath 是 install.sh 安装的 f 菜单脚本。
+const menuScriptPath = "/usr/local/bin/f"
+
+// updateMenuScript 用包里的 f.sh 替换菜单脚本（原子替换，正在运行的 f 不受影响）。
+func updateMenuScript(tarPath, tmp string) {
+	if _, err := os.Stat(menuScriptPath); err != nil {
+		return
+	}
+	src := filepath.Join(tmp, "f.sh")
+	if err := extractBinary(tarPath, "f.sh", src); err != nil {
+		return
+	}
+	staged := menuScriptPath + ".new"
+	if err := copyFileMode(src, staged, 0755); err != nil {
+		return
+	}
+	if err := os.Rename(staged, menuScriptPath); err != nil {
+		os.Remove(staged)
+	}
 }
