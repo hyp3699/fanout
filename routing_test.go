@@ -89,43 +89,43 @@ func TestNormalizeRuleSetRef(t *testing.T) {
 func TestNormalizeRuleConditions(t *testing.T) {
 	known := map[string]bool{"a": true, "b": true}
 	exits := map[string]bool{"jp": true}
-	base := RuleInput{Inbounds: []string{"a", "a", "b"}, Exit: "jp"}
+	base := RuleInput{Users: []string{"a", "a", "b"}, Exit: "jp"}
 
-	if _, err := normalizeRule(base, ruleEnv{Inbounds: known, Exits: exits}, nil); err == nil {
+	if _, err := normalizeRule(base, ruleEnv{Users: known, Exits: exits}, nil); err == nil {
 		t.Error("没有条件也没勾全部流量，必须拒绝")
 	}
 	all := base
 	all.All = true
-	r, err := normalizeRule(all, ruleEnv{Inbounds: known, Exits: exits}, nil)
-	if err != nil || !r.All || len(r.Inbounds) != 2 || !r.Enabled {
+	r, err := normalizeRule(all, ruleEnv{Users: known, Exits: exits}, nil)
+	if err != nil || !r.All || len(r.Users) != 2 || !r.Enabled {
 		t.Errorf("显式全部流量应当允许: %+v %v", r, err)
 	}
 	both := all
 	both.Domains = "a.com"
-	if _, err := normalizeRule(both, ruleEnv{Inbounds: known, Exits: exits}, nil); err == nil {
+	if _, err := normalizeRule(both, ruleEnv{Users: known, Exits: exits}, nil); err == nil {
 		t.Error("全部流量和条件同时给，应当拒绝")
 	}
 	noIn := base
-	noIn.Inbounds = nil
+	noIn.Users = nil
 	noIn.Domains = "a.com"
-	if _, err := normalizeRule(noIn, ruleEnv{Inbounds: known, Exits: exits}, nil); err == nil {
+	if _, err := normalizeRule(noIn, ruleEnv{Users: known, Exits: exits}, nil); err == nil {
 		t.Error("没选入站应当拒绝")
 	}
 	// 出口停掉后仍然可以改这条规则的其它字段
 	gone := base
 	gone.Exit = "us"
 	gone.Domains = "b.com"
-	if _, err := normalizeRule(gone, ruleEnv{Inbounds: known, Exits: exits}, nil); err == nil {
+	if _, err := normalizeRule(gone, ruleEnv{Users: known, Exits: exits}, nil); err == nil {
 		t.Error("新建规则指向不存在的出口应当拒绝")
 	}
-	if _, err := normalizeRule(gone, ruleEnv{Inbounds: known, Exits: exits}, &RouteRule{Exit: "us"}); err != nil {
+	if _, err := normalizeRule(gone, ruleEnv{Users: known, Exits: exits}, &RouteRule{Exit: "us"}); err != nil {
 		t.Errorf("修改规则时保留原来（已停掉）的出口应当允许: %v", err)
 	}
 	off := false
 	dis := base
 	dis.Domains = "a.com"
 	dis.Enabled = &off
-	if r, _ := normalizeRule(dis, ruleEnv{Inbounds: known, Exits: exits}, nil); r == nil || r.Enabled {
+	if r, _ := normalizeRule(dis, ruleEnv{Users: known, Exits: exits}, nil); r == nil || r.Enabled {
 		t.Errorf("enabled=false 应当保留: %+v", r)
 	}
 }
@@ -137,20 +137,20 @@ func liveJP() map[string]string {
 func TestBuildRouteRulesSkipsAndOrders(t *testing.T) {
 	existing := map[string]bool{"a": true, "b": true}
 	rules := []*RouteRule{
-		{ID: 1, Enabled: true, Inbounds: []string{"a"}, Exit: "jp", Domains: []string{"x.com", "1.1.1.0/24"},
+		{ID: 1, Enabled: true, Users: []string{"a"}, Exit: "jp", Domains: []string{"x.com", "1.1.1.0/24"},
 			RuleSets: []RuleSetRef{{Source: "geosite:netflix"}, {Source: "geoip:jp"}}},
-		{ID: 2, Enabled: true, Inbounds: []string{"b"}, Exit: "kr", Domains: []string{"y.com"}},                          // 出口没连通
-		{ID: 3, Enabled: false, Inbounds: []string{"a"}, Exit: "jp", Domains: []string{"z.com"}},                         // 停用
-		{ID: 4, Enabled: true, Inbounds: []string{"gone"}, Exit: "jp", Domains: []string{"w.com"}},                       // 入站不在了
-		{ID: 5, Enabled: true, Inbounds: []string{"b"}, Exit: "jp"},                                                      // 空条件：绝不整条转发
-		{ID: 6, Enabled: true, Inbounds: []string{"b", "gone"}, Exit: "us", All: true},                                   // 显式全部流量
-		{ID: 7, Enabled: true, Inbounds: []string{"b"}, Exit: "us", RuleSets: []RuleSetRef{{Source: "geosite:netflix"}}}, // 规则集复用
+		{ID: 2, Enabled: true, Users: []string{"b"}, Exit: "kr", Domains: []string{"y.com"}},                          // 出口没连通
+		{ID: 3, Enabled: false, Users: []string{"a"}, Exit: "jp", Domains: []string{"z.com"}},                         // 停用
+		{ID: 4, Enabled: true, Users: []string{"gone"}, Exit: "jp", Domains: []string{"w.com"}},                       // 入站不在了
+		{ID: 5, Enabled: true, Users: []string{"b"}, Exit: "jp"},                                                      // 空条件：绝不整条转发
+		{ID: 6, Enabled: true, Users: []string{"b", "gone"}, Exit: "us", All: true},                                   // 显式全部流量
+		{ID: 7, Enabled: true, Users: []string{"b"}, Exit: "us", RuleSets: []RuleSetRef{{Source: "geosite:netflix"}}}, // 规则集复用
 	}
 	out, sets := buildRouteRules(rules, liveJP(), existing, buildOptions{ForeignRuleSetTags: map[string]bool{"fanout-rs-geoip-jp": true}})
 	var got []string
 	for _, r := range out {
 		m := r.(map[string]any)
-		s := m["action"].(string) + ":" + strings.Join(toStrings(m["inbound"]), "+")
+		s := m["action"].(string) + ":" + strings.Join(toStrings(m["auth_user"]), "+")
 		for _, k := range []string{"domain_suffix", "ip_cidr", "rule_set"} {
 			if v, ok := m[k]; ok {
 				s += " " + k + "=" + strings.Join(toStrings(v), "+")
@@ -251,24 +251,24 @@ func testForeign() foreignConf {
 
 func TestNormalizeRuleTargetsAndLocalRuleSets(t *testing.T) {
 	fc := testForeign()
-	env := ruleEnv{Inbounds: map[string]bool{"a": true}, Exits: map[string]bool{"jp": true},
+	env := ruleEnv{Users: map[string]bool{"a": true}, Exits: map[string]bool{"jp": true},
 		Outbounds: fc.outboundTags(), RuleSets: fc.ruleSetTags()}
 
-	r, err := normalizeRule(RuleInput{Inbounds: []string{"a"}, Outbound: "direct", LocalRuleSets: []string{"geosite-openai", "geosite-openai"}}, env, nil)
+	r, err := normalizeRule(RuleInput{Users: []string{"a"}, Outbound: "direct", LocalRuleSets: []string{"geosite-openai", "geosite-openai"}}, env, nil)
 	if err != nil || r.Outbound != "direct" || r.Exit != "" || len(r.LocalRuleSets) != 1 {
 		t.Fatalf("已有出站 + 已有规则集应当允许: %+v %v", r, err)
 	}
-	if _, err := normalizeRule(RuleInput{Inbounds: []string{"a"}, Outbound: "wireguard-out", Domains: "a.com"}, env, nil); err != nil {
+	if _, err := normalizeRule(RuleInput{Users: []string{"a"}, Outbound: "wireguard-out", Domains: "a.com"}, env, nil); err != nil {
 		t.Errorf("端点也能当目标: %v", err)
 	}
 	bad := []RuleInput{
-		{Inbounds: []string{"a"}, Outbound: "nope", Domains: "a.com"},                        // 不存在的出站
-		{Inbounds: []string{"a"}, Outbound: "blk", Domains: "a.com"},                         // block 不能当目标
-		{Inbounds: []string{"a"}, Outbound: "fanout-exit-jp", Domains: "a.com"},              // fanout 自己的出站
-		{Inbounds: []string{"a"}, Outbound: "direct", Exit: "jp", Domains: "a.com"},          // 两个都选
-		{Inbounds: []string{"a"}, Domains: "a.com"},                                          // 一个都没选
-		{Inbounds: []string{"a"}, Exit: "jp", LocalRuleSets: []string{"nope"}},               // 不存在的规则集
-		{Inbounds: []string{"a"}, Exit: "jp", All: true, LocalRuleSets: []string{"my-list"}}, // 全部流量不能带条件
+		{Users: []string{"a"}, Outbound: "nope", Domains: "a.com"},                        // 不存在的出站
+		{Users: []string{"a"}, Outbound: "blk", Domains: "a.com"},                         // block 不能当目标
+		{Users: []string{"a"}, Outbound: "fanout-exit-jp", Domains: "a.com"},              // fanout 自己的出站
+		{Users: []string{"a"}, Outbound: "direct", Exit: "jp", Domains: "a.com"},          // 两个都选
+		{Users: []string{"a"}, Domains: "a.com"},                                          // 一个都没选
+		{Users: []string{"a"}, Exit: "jp", LocalRuleSets: []string{"nope"}},               // 不存在的规则集
+		{Users: []string{"a"}, Exit: "jp", All: true, LocalRuleSets: []string{"my-list"}}, // 全部流量不能带条件
 	}
 	for _, in := range bad {
 		if _, err := normalizeRule(in, env, nil); err == nil {
@@ -277,7 +277,7 @@ func TestNormalizeRuleTargetsAndLocalRuleSets(t *testing.T) {
 	}
 	// 被别的脚本删掉的出站 / 规则集：修改规则时保留原样允许
 	prev := &RouteRule{Outbound: "gone-out", LocalRuleSets: []string{"gone-set"}}
-	if _, err := normalizeRule(RuleInput{Inbounds: []string{"a"}, Outbound: "gone-out", LocalRuleSets: []string{"gone-set"}}, env, prev); err != nil {
+	if _, err := normalizeRule(RuleInput{Users: []string{"a"}, Outbound: "gone-out", LocalRuleSets: []string{"gone-set"}}, env, prev); err != nil {
 		t.Errorf("修改规则时保留已经不在的出站 / 规则集应当允许: %v", err)
 	}
 }
@@ -286,24 +286,24 @@ func TestBuildRouteRulesExistingOutboundsAndRuleSets(t *testing.T) {
 	existing := map[string]bool{"a": true, "b": true}
 	rules := []*RouteRule{
 		// 已有出站：没有任何连通出口也照样生效
-		{ID: 1, Enabled: true, Inbounds: []string{"a"}, Outbound: "direct", LocalRuleSets: []string{"geosite-openai"}},
+		{ID: 1, Enabled: true, Users: []string{"a"}, Outbound: "direct", LocalRuleSets: []string{"geosite-openai"}},
 		// 出站被删了：跳过
-		{ID: 2, Enabled: true, Inbounds: []string{"a"}, Outbound: "gone", Domains: []string{"x.com"}},
+		{ID: 2, Enabled: true, Users: []string{"a"}, Outbound: "gone", Domains: []string{"x.com"}},
 		// 引用的规则集全不在了：跳过，绝不退化成整条转发
-		{ID: 3, Enabled: true, Inbounds: []string{"b"}, Outbound: "warp-40000", LocalRuleSets: []string{"gone-set"}},
+		{ID: 3, Enabled: true, Users: []string{"b"}, Outbound: "warp-40000", LocalRuleSets: []string{"gone-set"}},
 		// 不在的规则集去掉、在的留下；geoip 的已有规则集触发解析
-		{ID: 4, Enabled: true, Inbounds: []string{"b"}, Exit: "jp", LocalRuleSets: []string{"gone-set", "geoip-cn"},
+		{ID: 4, Enabled: true, Users: []string{"b"}, Exit: "jp", LocalRuleSets: []string{"gone-set", "geoip-cn"},
 			RuleSets: []RuleSetRef{{Source: "geosite:netflix"}}},
 		// 端点也能当目标
-		{ID: 5, Enabled: true, Inbounds: []string{"b"}, Outbound: "wireguard-out", All: true},
+		{ID: 5, Enabled: true, Users: []string{"b"}, Outbound: "wireguard-out", All: true},
 		// 指向没连通出口的规则仍然跳过
-		{ID: 6, Enabled: true, Inbounds: []string{"b"}, Exit: "kr", LocalRuleSets: []string{"my-list"}},
+		{ID: 6, Enabled: true, Users: []string{"b"}, Exit: "kr", LocalRuleSets: []string{"my-list"}},
 	}
 	out, sets := buildRouteRules(rules, map[string]string{"jp": "fanout-exit-jp"}, existing, buildOptions{Foreign: testForeign()})
 	var got []string
 	for _, r := range out {
 		m := r.(map[string]any)
-		s := m["action"].(string) + ":" + strings.Join(toStrings(m["inbound"]), "+")
+		s := m["action"].(string) + ":" + strings.Join(toStrings(m["auth_user"]), "+")
 		if v, ok := m["rule_set"]; ok {
 			s += " rule_set=" + strings.Join(toStrings(v), "+")
 		}
