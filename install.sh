@@ -172,7 +172,14 @@ if [[ -f main.go ]] && command -v go >/dev/null; then
 else
   echo "      下载预编译版本 (${GOARCH})"
   TMP=$(mktemp -d)
-  URL="https://github.com/${REPO}/releases/latest/download/fanout-linux-${GOARCH}.tar.gz"
+  # 先拿最新版本号再按版本号下载：latest/download 的跳转有缓存，刚发版时可能拿到上一版
+  TAG=$(curl -fsSL --max-time 15 "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
+        | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+  if [[ -n "$TAG" ]]; then
+    URL="https://github.com/${REPO}/releases/download/${TAG}/fanout-linux-${GOARCH}.tar.gz"
+  else
+    URL="https://github.com/${REPO}/releases/latest/download/fanout-linux-${GOARCH}.tar.gz"
+  fi
   if ! curl -fsSL "$URL" -o "$TMP/f.tar.gz"; then
     echo "      下载失败: $URL" >&2
     echo "      也可以 clone 仓库后在源码目录运行本脚本" >&2
