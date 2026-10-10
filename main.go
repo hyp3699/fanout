@@ -134,6 +134,10 @@ func main() {
 	mux.HandleFunc("/api/rules/delete", apiRuleDelete(mgr))
 	mux.HandleFunc("/api/rules/move", apiRuleMove(mgr))
 	mux.HandleFunc("/api/rules/enable", apiRuleEnable(mgr))
+	// 用户限速 / 流量限制（与 sb.sh 共用数据）
+	mux.HandleFunc("/api/users", apiUsers)
+	mux.HandleFunc("/api/users/speed", apiUserSpeed)
+	mux.HandleFunc("/api/users/traffic", apiUserTraffic)
 
 	auth, created, err := NewAuth(*workDir)
 	if err != nil {
