@@ -343,7 +343,7 @@ func copyFileMode(src, dst string, mode os.FileMode) error {
 // systemd / openrc 各一套；都不可用时退回直接自我 exec。
 func restartSelf() {
 	if hasCmd("systemctl") && dirExists("/run/systemd/system") {
-		_ = exec.Command("systemctl", "restart", "fanout").Start()
+		_ = exec.Command("systemctl", "--no-block", "restart", "fanout").Start()
 		return
 	}
 	if hasCmd("rc-service") {
