@@ -244,7 +244,7 @@ function fillUser(){
   $('#uspeedcur').textContent = '当前限速：' + (u.speed ? u.speed.text + ' ' + (MODE[u.speed.mode] || '') : '未设置')
     + (u.rules ? '　｜　该用户有 ' + u.rules + ' 条分流规则，限速后照常生效' : '')
     + (users.speed_ready ? '' : '　｜　当前内核不支持限速，需要 -xhttp-limiter 版 sing-box');
-  $('#utrafcur').textContent = (users.traffic_ready ? '' : '未检测到流量统计服务（需要先用 sb.sh 安装）　｜　')
+  $('#utrafcur').textContent = (users.traffic_ready ? '' : '未检测到流量统计服务（需要先用 sing-box-08.sh 安装）　｜　')
     + '流量限制：' + trafText(u) + '　｜　本周期已用 ' + fmtBytes(u.period_total) + '，累计 ' + fmtBytes(u.total);
   $('#uspeeddel').disabled = !u.speed;
   $('#utrafdel').disabled = !u.traffic;

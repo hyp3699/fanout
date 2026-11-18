@@ -254,9 +254,6 @@ body{margin:0;height:100vh;display:flex;flex-direction:column;gap:16px;
   align-items:center;justify-content:center;
   background:#12151a;color:#dde3ec;
   font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-.links{display:flex;gap:16px}
-.links a{color:#8b95a5;text-decoration:none;font-size:12px}
-.links a:hover{color:#4a9eda}
 form{background:#181c23;border:1px solid #262c36;border-radius:6px;
   padding:22px 24px;width:300px}
 h1{font-size:13px;font-weight:600;margin:0 0 16px}
@@ -277,12 +274,6 @@ button{width:100%;margin-top:14px;background:#4a9eda;border:0;color:#0b0e12;
   <button type="submit">进入</button>
   <div class="err" id="err"></div>
 </form>
-<div class="links">
-  <a href="https://t.me/+ft-zI76oovgwNmRh" target="_blank" rel="noopener">交流群</a>
-  <a href="https://youtube.com/@joeyblog" target="_blank" rel="noopener">油管</a>
-  <a href="https://joeyblog.net" target="_blank" rel="noopener">博客</a>
-  <a href="https://github.com/hyp3699/fanout" target="_blank" rel="noopener">GitHub</a>
-</div>
 <script>
 document.getElementById('f').onsubmit = async e => {
   e.preventDefault();

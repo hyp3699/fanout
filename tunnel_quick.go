@@ -128,6 +128,8 @@ func quickWriteUnit(n *node) error {
 		scheme, extra = "https", " --no-tls-verify"
 	}
 	name := quickUnitName(n.Kind, n.Number)
+	// ExecStartPost 让 fanout 自己按日志里的新域名刷新链接（以前是 . sb.sh 里的
+	// qt_refresh_url）。不再依赖仓库/机器上的任何外部脚本，装到哪都能自洽。
 	unit := fmt.Sprintf(`[Unit]
 Description=Cloudflare Quick Tunnel for %s-%d
 After=network-online.target sing-box.service
@@ -138,7 +140,7 @@ Type=simple
 Environment=HOME=%s
 ExecStartPre=/bin/sh -c ': > %s/%s.log'
 ExecStart=%s tunnel --no-autoupdate --edge-ip-version auto --protocol http2 --logfile %s/%s.log --url %s://localhost:%d%s
-ExecStartPost=-/bin/bash -c 'SB_LOAD_ONLY=1 . %s/sb.sh >/dev/null 2>&1; qt_refresh_url "%s" "%s" "%d" >/dev/null 2>&1'
+ExecStartPost=-%s -refresh-quick %s
 TimeoutStartSec=90
 Restart=always
 RestartSec=5
@@ -147,7 +149,7 @@ RestartSec=5
 WantedBy=multi-user.target
 `, n.Kind, n.Number, lp.QuickDir, lp.QuickDir, name,
 		lp.QuickBin, lp.QuickDir, name, scheme, n.Port, extra,
-		filepath.Dir(lp.Bin), filepath.Join(lp.ConfDir, n.File), n.Kind, n.Number)
+		fanoutSelfPath(), name)
 	path := filepath.Join(lp.QuickUnitDir, name+".service")
 	if err := writeFileAtomic(path, []byte(unit), 0644); err != nil {
 		return err
@@ -329,6 +331,82 @@ func quickRemove(kind string, number int) {
 	_ = os.Remove(filepath.Join(lp.QuickDir, unit+".fail"))
 	_ = os.Remove(filepath.Join(lp.QuickDir, fmt.Sprintf("%s-%d.dedicated", kind, number)))
 	_, _ = adminExec("systemctl", "daemon-reload")
+}
+
+// quickDomainWaitTries 是等日志里出现域名的轮询次数（每次 1 秒）。
+// 与 qt_refresh_url 的 40 次对齐；单测里改小，免得真等 40 秒。
+var quickDomainWaitTries = 40
+
+// quickRefreshUnit 是 `fanout -refresh-quick <单元名>` 的实现：等 cloudflared 日志里
+// 出现域名后，把对应入站的临时隧道链接重写一遍。
+//
+// 由 systemd 单元的 ExecStartPost 调起（见 quickWriteUnit）。对齐 sing-box-08.sh 里
+// qt_refresh_url 的做法：最多等 40 秒，拿不到就把原因写到 stderr 并返回非 0。
+func quickRefreshUnit(unit string) int {
+	if !strings.HasPrefix(unit, "cf-quick-") || strings.Contains(unit, "/") {
+		fmt.Fprintf(os.Stderr, "单元名不合法: %q\n", unit)
+		return 2
+	}
+	lp := panelPaths()
+
+	logPath := filepath.Join(lp.QuickDir, unit+".log")
+	domain := ""
+	for i := 0; i < quickDomainWaitTries; i++ {
+		if d := quickDomainFromLog(logPath); d != "" {
+			domain = d
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if domain == "" {
+		fmt.Fprintf(os.Stderr, "%s 40 秒内没等到临时隧道域名\n", unit)
+		return 1
+	}
+
+	// 只扫配置目录里的入站文件名，不跑 fillNodeRuntime：这一步在隧道启动路径上，
+	// 不该为了刷新一条链接去调 nft。
+	entries, err := os.ReadDir(lp.ConfDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "读配置目录失败: %v\n", err)
+		return 1
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !knownNodeFile(name) {
+			continue
+		}
+		kind, number, ok := splitNodeFile(name)
+		if !ok || quickUnitName(kind, number) != unit {
+			continue
+		}
+		doc, err := readNodeDoc(name)
+		if err != nil {
+			continue
+		}
+		n := describeNode(name, doc)
+		if n == nil {
+			continue
+		}
+		if err := quickRefreshLink(n, domain); err != nil {
+			fmt.Fprintf(os.Stderr, "刷新 %s 的链接失败: %v\n", unit, err)
+			return 1
+		}
+		return 0
+	}
+	fmt.Fprintf(os.Stderr, "没有找到 %s 对应的入站\n", unit)
+	return 1
+}
+
+// fanoutSelfPath 返回当前程序路径，写进临时隧道单元的 ExecStartPost。
+// 允许单测替换掉，免得测试里把测试二进制当成 fanout。
+var fanoutSelfPath = func() string {
+	if p, err := os.Executable(); err == nil {
+		if resolved, err := filepath.EvalSymlinks(p); err == nil {
+			return resolved
+		}
+		return p
+	}
+	return "/usr/local/bin/fanout"
 }
 
 // quickRefreshLink 按当前临时域名重写节点链接（脚本 qt_refresh_url 的 Go 版）。

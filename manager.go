@@ -3,8 +3,10 @@ package main
 import (
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -413,12 +415,41 @@ func (m *Manager) Shutdown() {
 	}
 }
 
+// ipForwardPath 与 runSysctl 抽成变量：真机上写 /proc 需要 root，单测里替换成临时文件。
+var (
+	ipForwardPath = "/proc/sys/net/ipv4/ip_forward"
+	runSysctl     = func(args ...string) error { return cmdRun(exec.Command("sysctl", args...)) }
+)
+
 // prepareHost 打开转发开关。netns 出网依赖它。
+//
+// 顺序：先读 /proc/sys/net/ipv4/ip_forward，已经是 1 就直接返回；否则直接写
+// /proc/sys/net/ipv4/ip_forward（不依赖 procps，Debian 13 这类精简镜像没有 sysctl 命令），
+// 写不动再退回 sysctl -qw。受限容器里两样都可能被拒，那样只打警告、不拦启动：
+// 转发没开最多是隧道出不了网，而网页面板（口令、路径、改配置）必须能打开。
 func prepareHost() error {
-	if err := cmdRun(exec.Command("sysctl", "-qw", "net.ipv4.ip_forward=1")); err != nil {
-		return fmt.Errorf("开启 ip_forward 失败: %w", err)
+	if blob, err := os.ReadFile(ipForwardPath); err == nil {
+		if strings.TrimSpace(string(blob)) == "1" {
+			return nil
+		}
 	}
+	if err := os.WriteFile(ipForwardPath, []byte("1\n"), 0644); err == nil {
+		return nil
+	}
+	if err := runSysctl("-qw", "net.ipv4.ip_forward=1"); err == nil {
+		return nil
+	}
+	log.Printf("警告：开启 ip_forward 失败（受限容器或没有权限），面板照常启动，但隧道可能出不了网")
 	return nil
+}
+
+// nodesSnapshot 复制一份节点列表，供恢复 / 挑选这类需要在锁外遍历的路径使用。
+func (m *Manager) nodesSnapshot() []Node {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]Node, len(m.nodes))
+	copy(out, m.nodes)
+	return out
 }
 
 // nodeInUse 判断某节点是否已被别的隧道占用。

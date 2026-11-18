@@ -80,9 +80,10 @@ func (m *Manager) restoreState() (int, error) {
 		return 0, fmt.Errorf("解析状态文件失败: %w", err)
 	}
 
-	// 从当前节点列表补回地区、延迟等元数据；节点已下线时退回存盘的最小信息
+	// 从当前节点列表补回地区、延迟等元数据；节点已下线时退回存盘的最小信息。
+	// 走加锁快照：恢复现在跟网页接口、后台拉列表并发跑，直接读 m.nodes 是数据竞争。
 	known := map[string]Node{}
-	for _, n := range m.nodes {
+	for _, n := range m.nodesSnapshot() {
 		known[n.HostName] = n
 	}
 

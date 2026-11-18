@@ -29,6 +29,9 @@ func main() {
 	sbService := flag.String("singbox-service", "sing-box", "sing-box 的 systemd/OpenRC 服务名；存在时用它 reload，填 none 则由 fanout 自己托管进程")
 	publicIP := flag.String("ip", "", "母机公网 IPv4，用于分享链接/SOCKS5 地址；留空则自动探测")
 	showVersion := flag.Bool("version", false, "显示版本后退出")
+	// 内部参数：临时隧道单元起来后，由 systemd 的 ExecStartPost 调自己刷新链接。
+	// 以前这活是 . sb.sh 里的 qt_refresh_url 干的，仓库里不再带那份外来脚本。
+	refreshQuick := flag.String("refresh-quick", "", "内部参数：临时隧道启动后按日志里的域名刷新链接，值为 cf-quick-… 单元名")
 	flag.Parse()
 
 	if *publicIP == "" {
@@ -38,6 +41,12 @@ func main() {
 	if *showVersion {
 		fmt.Println("fanout", version)
 		return
+	}
+
+	// 这条路径由 systemd 在隧道刚起时调用，必须赶在抢工作目录锁之前处理：
+	// 面板服务正拿着那把锁，带锁就会自锁死。
+	if *refreshQuick != "" {
+		os.Exit(quickRefreshUnit(*refreshQuick))
 	}
 
 	if os.Geteuid() != 0 {
@@ -84,39 +93,26 @@ func main() {
 	}
 
 	mgr := NewManager(*maxSlots, *workDir)
-	log.Printf("正在拉取节点列表...")
-	if n, err := mgr.RefreshNodes(); err != nil {
-		log.Printf("拉取失败（可在 Web 界面重试）: %v", err)
-	} else {
-		log.Printf("已获取 %d 个节点", n)
+
+	// 面板自己的东西先就位：口令、访问路径、Web 设置都是毫秒级的本地写盘。
+	// 拉节点列表、恢复隧道一律排到后面异步跑：VPN Gate 列表最长 60 秒超时，
+	// 任何一步卡住都不该让用户看不到口令和访问地址。
+	portExplicit := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "web" {
+			portExplicit = true
+		}
+	})
+	auth, webCfg, pwCreated, bpCreated, err := initPanelCore(*workDir, *webPort, portExplicit)
+	if err != nil {
+		log.Fatal(err)
 	}
-
-	if n, err := mgr.restoreState(); err != nil {
-		log.Printf("恢复上次状态失败: %v", err)
-	} else if n > 0 {
-		log.Printf("正在恢复上次的 %d 条隧道", n)
+	if pwCreated {
+		log.Printf("已生成访问口令，见 %s", filepath.Join(*workDir, "password"))
 	}
-
-	go mgr.WatchHealth()
-
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-stop
-		log.Println("正在清理所有隧道...")
-		// 清理有上限：停服务时如果正好在 systemctl reload sing-box，systemd 会让那个
-		// reload 排在 fanout 停止之后，两边互等到 TimeoutStopSec 被 SIGKILL（更新时卡 30 秒）。
-		go func() {
-			time.Sleep(10 * time.Second)
-			log.Println("清理超时，直接退出")
-			unlock()
-			os.Exit(0)
-		}()
-		mgr.Shutdown()
-		closePanel()
-		unlock() // os.Exit 会绕过 defer，这里手动放锁
-		os.Exit(0)
-	}()
+	if bpCreated {
+		log.Printf("已生成访问路径，见 %s", filepath.Join(*workDir, "basepath"))
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", handleIndex)
@@ -143,42 +139,14 @@ func main() {
 	mux.HandleFunc("/api/rules/delete", apiRuleDelete(mgr))
 	mux.HandleFunc("/api/rules/move", apiRuleMove(mgr))
 	mux.HandleFunc("/api/rules/enable", apiRuleEnable(mgr))
-	// 用户限速 / 流量限制（与 sb.sh 共用数据）
+	// 用户限速 / 流量限制（与 sing-box-08.sh 共用数据）
 	mux.HandleFunc("/api/users", apiUsers)
 	mux.HandleFunc("/api/users/speed", apiUserSpeed)
 	mux.HandleFunc("/api/users/traffic", apiUserTraffic)
 
-	// 网页面板新增的功能：入站读写、订阅用户、Nginx、证书、Cloudflare、系统
+	// 网页面板扩展：入站读写、订阅用户、Nginx、证书、Cloudflare、系统
 	// （全部走同一个鉴权中间件，见 registerAdminAPI）
 	registerAdminAPI(mux)
-
-	auth, created, err := NewAuth(*workDir)
-	if err != nil {
-		log.Fatalf("初始化访问口令失败: %v", err)
-	}
-	if created {
-		log.Printf("已生成访问口令，见 %s", filepath.Join(*workDir, "password"))
-	}
-
-	bpCreated, err := initBasePath(*workDir)
-	if err != nil {
-		log.Fatalf("初始化访问路径失败: %v", err)
-	}
-	if bpCreated {
-		log.Printf("已生成访问路径，见 %s", filepath.Join(*workDir, "basepath"))
-	}
-
-	// 用户显式给了 -web 就以命令行为准，否则沿用界面上存过的端口
-	portExplicit := false
-	flag.Visit(func(f *flag.Flag) {
-		if f.Name == "web" {
-			portExplicit = true
-		}
-	})
-	webCfg, err := loadWebSettings(*workDir, *webPort, portExplicit)
-	if err != nil {
-		log.Fatalf("加载 Web 设置失败: %v", err)
-	}
 
 	srv := newWebServer(StripBasePath(auth.Wrap(mux)))
 	// 设置面板：改密码 / 改路径 / 改端口 / 改本地监听。
@@ -188,9 +156,68 @@ func main() {
 
 	log.Printf("管理界面: http://<本机IP>%s%s/", webCfg.listenAddrString(), currentBasePath())
 	log.Printf("SOCKS5 端口在 %d-%d 之间随机分配", randPortMin, randPortMax)
+
+	// 节点列表、上次的隧道、健康检查全部在后台跑。
+	// Manager 的 Nodes/Tunnels 都带锁，restoreState 里读节点列表也走锁，
+	// 所以网页在恢复期间照常能开、能列出已恢复的出口。
+	go func() {
+		log.Printf("正在拉取节点列表...")
+		if n, err := mgr.RefreshNodes(); err != nil {
+			log.Printf("拉取失败（可在 Web 界面重试）: %v", err)
+		} else {
+			log.Printf("已获取 %d 个节点", n)
+		}
+
+		if n, err := mgr.restoreState(); err != nil {
+			log.Printf("恢复上次状态失败: %v", err)
+		} else if n > 0 {
+			log.Printf("正在恢复上次的 %d 条隧道", n)
+		}
+
+		mgr.WatchHealth()
+	}()
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-stop
+		log.Println("正在清理所有隧道...")
+		// 清理有上限：停服务时如果正好在 systemctl reload sing-box，systemd 会让那个
+		// reload 排在 fanout 停止之后，两边互等到 TimeoutStopSec 被 SIGKILL（更新时卡 30 秒）。
+		go func() {
+			time.Sleep(10 * time.Second)
+			log.Println("清理超时，直接退出")
+			unlock()
+			os.Exit(0)
+		}()
+		mgr.Shutdown()
+		closePanel()
+		unlock() // os.Exit 会绕过 defer，这里手动放锁
+		os.Exit(0)
+	}()
+
 	if err := srv.serve(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// initPanelCore 只做「面板自己能打开」所必需的三件事：访问口令、访问路径、Web 设置。
+// 全部是本地文件读写，正常在毫秒级完成；网络相关的初始化一概不放在这里。
+// 返回口令 / 路径是否为本进程新生成。
+func initPanelCore(workDir string, webPort int, portExplicit bool) (*Auth, WebSettings, bool, bool, error) {
+	auth, pwCreated, err := NewAuth(workDir)
+	if err != nil {
+		return nil, WebSettings{}, false, false, fmt.Errorf("初始化访问口令失败: %w", err)
+	}
+	bpCreated, err := initBasePath(workDir)
+	if err != nil {
+		return nil, WebSettings{}, pwCreated, false, fmt.Errorf("初始化访问路径失败: %w", err)
+	}
+	cfg, err := loadWebSettings(workDir, webPort, portExplicit)
+	if err != nil {
+		return nil, WebSettings{}, pwCreated, bpCreated, fmt.Errorf("加载 Web 设置失败: %w", err)
+	}
+	return auth, cfg, pwCreated, bpCreated, nil
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

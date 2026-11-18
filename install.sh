@@ -28,7 +28,7 @@ else
   exit 1
 fi
 
-# seed_settings 把端口落进 settings.json —— 程序、f 菜单、Web 界面都以它为准。
+# seed_settings 把端口落进 settings.json —— 程序、sing-box-08.sh 菜单、Web 界面都以它为准。
 #
 # 重装时不覆盖用户已经改过的端口：除非这次显式指定了 WEB_PORT，
 # 否则沿用原值，免得重装一次把人家改好的端口打回默认。
@@ -46,10 +46,37 @@ seed_settings() {
 svc_install() {
   if [[ "$INIT_SYS" == systemd ]]; then
     # 端口不写进服务文件：它由 ${WORK_DIR}/settings.json 决定（见 seed_settings），
-    # 两处都写会互相拽回旧值——界面改完重启失效，或 f 改完被配置覆盖。
+    # 两处都写会互相拽回旧值——界面改完重启失效，或菜单改完被配置覆盖。
     # 老版本模板里可能还带 -web，一并去掉。
-    sed "s#-web [0-9]* ##; s#-dir /var/lib/fanout#${FANOUT_ARGS}#" fanout.service \
+    # 优先用包里的 fanout.service（下载分支已解到临时文件，不在当前目录留垃圾），
+    # 从源码目录跑时用仓库里的那个。
+    local src="${SVC_SRC:-}"
+    [[ -z $src && -f fanout.service ]] && src=fanout.service
+    if [[ -z $src ]]; then
+      echo "      找不到 fanout.service，改用内置模板" >&2
+      src=$(mktemp)
+      SVC_TMP="$src"
+      cat > "$src" <<'UNITEOF'
+[Unit]
+Description=fanout - VPN Gate 出口扇出网关
+After=network-online.target sing-box.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/fanout -dir /var/lib/fanout
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target
+UNITEOF
+    fi
+    sed "s#-web [0-9]* ##; s#-dir /var/lib/fanout#${FANOUT_ARGS}#" "$src" \
       > /etc/systemd/system/fanout.service
+    [[ -n ${SVC_TMP:-} ]] && rm -f "$SVC_TMP"
     systemctl daemon-reload
   else
     # OpenRC 没有 systemd 那套单元文件，直接写 init script。
@@ -187,8 +214,13 @@ else
   fi
   tar xzf "$TMP/f.tar.gz" -C "$TMP"
   install -m 755 "$TMP/fanout" "$BIN"
-  [[ -f fanout.service ]] || cp "$TMP/fanout.service" .
-  [[ -f "$TMP/f.sh" ]] && install -m 755 "$TMP/f.sh" /usr/local/bin/f
+  # 包里的 service 解到临时文件，装服务时再落到 /etc/systemd/system；
+  # 以前是 cp 到当前目录，会在用户随便哪个目录里留一份 fanout.service。
+  if [[ -f "$TMP/fanout.service" ]]; then
+    SVC_SRC=$(mktemp)
+    SVC_TMP="$SVC_SRC"
+    install -m 644 "$TMP/fanout.service" "$SVC_SRC"
+  fi
   rm -rf "$TMP"
 fi
 
@@ -253,42 +285,45 @@ FANOUT_ARGS="-dir ${WORK_DIR}"
 [[ "$SINGBOX_CONF" != /etc/sing-box/conf ]] && FANOUT_ARGS+=" -singbox-conf ${SINGBOX_CONF}"
 
 echo "[4/6] 放行转发"
-# Debian 13 等精简系统可能没装 procps（没有 sysctl 命令），也没有 /etc/sysctl.conf
-if command -v sysctl >/dev/null; then
-  sysctl -qw net.ipv4.ip_forward=1
-else
-  echo 1 > /proc/sys/net/ipv4/ip_forward
+# Debian 13 等精简系统可能没装 procps（没有 sysctl 命令），也没有 /etc/sysctl.conf。
+# 受限容器（LXC 无内核模块、只读 /proc/sys）里写不进去也不拦安装：装完照样能开面板，
+# 隧道出网由 fanout 启动时再试一次（prepareHost）。
+if ! { [[ -f /proc/sys/net/ipv4/ip_forward ]] && grep -qx 1 /proc/sys/net/ipv4/ip_forward; }; then
+  { echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null \
+    || { command -v sysctl >/dev/null && sysctl -qw net.ipv4.ip_forward=1; }; } 2>/dev/null \
+    || echo "      警告: 开启 ip_forward 失败（受限容器？），隧道可能出不了网" >&2
 fi
 if [[ -d /etc/sysctl.d ]]; then
-  echo 'net.ipv4.ip_forward=1' > /etc/sysctl.d/99-fanout.conf
+  echo 'net.ipv4.ip_forward=1' > /etc/sysctl.d/99-fanout.conf 2>/dev/null || true
 else
-  grep -q '^net.ipv4.ip_forward=1' /etc/sysctl.conf 2>/dev/null \
-    || echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf
+  { grep -q '^net.ipv4.ip_forward=1' /etc/sysctl.conf 2>/dev/null \
+    || echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf; } 2>/dev/null || true
 fi
-# FORWARD 链常有兜底 REJECT，fanout 用的网段要插到最前面
-if ! iptables -C FORWARD -s 10.99.0.0/16 -j ACCEPT 2>/dev/null; then
-  iptables -I FORWARD 1 -s 10.99.0.0/16 -j ACCEPT
+# FORWARD 链常有兜底 REJECT，fanout 用的网段要插到最前面。
+# 无内核模块的容器里 iptables 会直接报错，不能让它把 set -e 的安装整个带走。
+if command -v iptables >/dev/null 2>&1; then
+  iptables -C FORWARD -s 10.99.0.0/16 -j ACCEPT 2>/dev/null \
+    || iptables -I FORWARD 1 -s 10.99.0.0/16 -j ACCEPT 2>/dev/null \
+    || echo "      警告: 添加 FORWARD 规则失败（无内核模块？），隧道可能出不了网" >&2
+  iptables -C FORWARD -d 10.99.0.0/16 -j ACCEPT 2>/dev/null \
+    || iptables -I FORWARD 1 -d 10.99.0.0/16 -j ACCEPT 2>/dev/null \
+    || echo "      警告: 添加 FORWARD 规则失败（无内核模块？），隧道可能出不了网" >&2
+  command -v netfilter-persistent >/dev/null && netfilter-persistent save >/dev/null 2>&1 || true
+else
+  echo "      警告: 没有 iptables，跳过 FORWARD 放行" >&2
 fi
-if ! iptables -C FORWARD -d 10.99.0.0/16 -j ACCEPT 2>/dev/null; then
-  iptables -I FORWARD 1 -d 10.99.0.0/16 -j ACCEPT
-fi
-command -v netfilter-persistent >/dev/null && netfilter-persistent save >/dev/null 2>&1 || true
 
 echo "[5/6] 安装服务"
-# 管理菜单
-if [[ -f f.sh ]]; then
-  install -m 755 f.sh /usr/local/bin/f
-elif [[ -n "${TMP:-}" && -f "${TMP}/f.sh" ]]; then
-  install -m 755 "${TMP}/f.sh" /usr/local/bin/f
-else
-  curl -fsSL "https://raw.githubusercontent.com/${REPO}/main/f.sh" -o /usr/local/bin/f \
-    && chmod 755 /usr/local/bin/f
-fi
+# 管理菜单已经搬进 sing-box-08.sh 的「网页面板」项，不再装 f 快捷命令；
+# 老安装留下的 /usr/local/bin/f 一并清掉，免得指着一个永不更新的旧菜单。
+rm -f /usr/local/bin/f
 mkdir -p "$WORK_DIR"
 chmod 700 "$WORK_DIR"
 seed_settings
 svc_install
 svc_enable_start
+# 装服务用的临时 unit 用完即删，不在 /tmp 留垃圾
+[[ -n "${SVC_TMP:-}" ]] && rm -f "$SVC_TMP"
 
 echo "[6/6] 就绪"
 sleep 3
@@ -317,11 +352,5 @@ echo "  路径和口令都是随机生成的，也可以随时查看："
 echo "    cat ${WORK_DIR}/basepath"
 echo "    cat ${WORK_DIR}/password"
 echo
-echo "  输入 f 打开管理菜单"
-echo
-echo "  ────────────────────────────────"
-echo "  交流群  https://t.me/+ft-zI76oovgwNmRh"
-echo "  油管    https://youtube.com/@joeyblog"
-echo "  博客    https://joeyblog.net"
-echo "  项目    https://github.com/hyp3699/fanout"
+echo "  开机自启、改端口/口令/路径、看日志、域名反代、卸载都在 sing-box-08.sh 的「网页面板」里。"
 echo

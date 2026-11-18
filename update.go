@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -203,8 +204,9 @@ func applyUpdate() error {
 		return fmt.Errorf("替换二进制失败: %w", err)
 	}
 
-	// 顺带更新 f 管理菜单（安装时放在 /usr/local/bin/f），否则菜单永远停在旧版
-	updateMenuScript(tarPath, tmp)
+	// 老版本升上来时装过 f 快捷命令，现在菜单全在 sing-box-08.sh 里，顺手清掉残留。
+	// 不清的话 `f` 会指着一个永不再更新的旧菜单，比没有更坑。
+	removeLegacyMenuScript()
 
 	// 让 init 系统重启我们，拉起新版本。异步触发并延迟一下，
 	// 好让这次请求的响应先发回界面。
@@ -365,23 +367,13 @@ func dirExists(p string) bool {
 	return err == nil && fi.IsDir()
 }
 
-// menuScriptPath 是 install.sh 安装的 f 菜单脚本。
-const menuScriptPath = "/usr/local/bin/f"
+// legacyMenuPath 是旧版本安装的 f 快捷命令。菜单已搬进 sing-box-08.sh，
+// 升级时把这个残留删掉（变量化方便单测）。
+var legacyMenuPath = "/usr/local/bin/f"
 
-// updateMenuScript 用包里的 f.sh 替换菜单脚本（原子替换，正在运行的 f 不受影响）。
-func updateMenuScript(tarPath, tmp string) {
-	if _, err := os.Stat(menuScriptPath); err != nil {
-		return
-	}
-	src := filepath.Join(tmp, "f.sh")
-	if err := extractBinary(tarPath, "f.sh", src); err != nil {
-		return
-	}
-	staged := menuScriptPath + ".new"
-	if err := copyFileMode(src, staged, 0755); err != nil {
-		return
-	}
-	if err := os.Rename(staged, menuScriptPath); err != nil {
-		os.Remove(staged)
+// removeLegacyMenuScript 删掉历史残留的 f 快捷命令；本来就不存在也算成功。
+func removeLegacyMenuScript() {
+	if err := os.Remove(legacyMenuPath); err != nil && !os.IsNotExist(err) {
+		log.Printf("清理旧快捷命令 %s 失败: %v", legacyMenuPath, err)
 	}
 }
