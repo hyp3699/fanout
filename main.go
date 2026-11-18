@@ -148,6 +148,10 @@ func main() {
 	mux.HandleFunc("/api/users/speed", apiUserSpeed)
 	mux.HandleFunc("/api/users/traffic", apiUserTraffic)
 
+	// 网页面板新增的功能：入站读写、订阅用户、Nginx、证书、Cloudflare、系统
+	// （全部走同一个鉴权中间件，见 registerAdminAPI）
+	registerAdminAPI(mux)
+
 	auth, created, err := NewAuth(*workDir)
 	if err != nil {
 		log.Fatalf("初始化访问口令失败: %v", err)

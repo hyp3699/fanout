@@ -1,0 +1,102 @@
+/* 网页面板新增部分的样式：标签页、卡片、徽章、操作面板。
+   手机（Android Chrome，360–430px）优先：所有行都能换行，不出现横向滚动。 */
+
+.tabs{display:flex;gap:6px;padding:8px 10px;border-bottom:1px solid var(--line);
+  background:var(--panel);position:sticky;top:0;z-index:30;overflow-x:auto;
+  scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.tabs::-webkit-scrollbar{display:none}
+.tabs button{background:transparent;border:1px solid transparent;color:var(--dim);
+  padding:6px 11px;border-radius:999px;font-size:12px;flex:none}
+.tabs button.on{background:rgba(74,158,218,.14);border-color:rgba(74,158,218,.45);color:var(--text)}
+.tabs .tabdot{width:6px;height:6px;border-radius:50%;background:var(--warn);display:none}
+.tabs button.alert .tabdot{display:inline-block}
+.pane{display:none}
+.pane.on{display:block}
+
+.card{border:1px solid var(--line);background:var(--panel);border-radius:8px;
+  padding:11px 12px;margin-bottom:8px;min-width:0}
+.card.plain{background:transparent}
+.card .top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+.card .name{font-weight:600;font-size:13px;overflow-wrap:anywhere}
+.card .sub{color:var(--dim);font-size:11px;margin-top:5px;overflow-wrap:anywhere}
+.card .acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}
+.card .acts button{font-size:11px;padding:4px 9px}
+.card .acts .spacer{flex:1}
+
+.badge{display:inline-flex;align-items:center;gap:4px;font-size:10px;line-height:1;
+  padding:4px 7px;border-radius:999px;border:1px solid var(--line);color:var(--dim);
+  background:#0e1116;white-space:nowrap}
+.badge.ok{color:#7fd3a3;border-color:rgba(63,166,107,.45);background:rgba(63,166,107,.10)}
+.badge.warn{color:#e0b064;border-color:rgba(201,144,58,.45);background:rgba(201,144,58,.10)}
+.badge.bad{color:#e58e8a;border-color:rgba(194,84,80,.45);background:rgba(194,84,80,.10)}
+.badge.acc{color:#8cc6ee;border-color:rgba(74,158,218,.45);background:rgba(74,158,218,.10)}
+
+.kvgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin:0}
+.kvgrid .kvitem{background:#0e1116;border:1px solid var(--line);border-radius:6px;padding:8px 10px}
+.kvgrid .kvitem b{display:block;font-size:14px;font-weight:600;font-variant-numeric:tabular-nums}
+.kvgrid .kvitem span{display:block;color:var(--dim);font-size:10px;margin-top:3px}
+
+.sec{border-top:1px solid var(--line);margin-top:14px;padding-top:13px}
+.sec h3{font-size:12px;margin:0 0 9px;color:var(--text);display:flex;align-items:center;gap:7px}
+.sec h3 .badge{margin-left:auto}
+.field{display:block;margin-bottom:11px}
+.field>span{display:block;color:var(--dim);font-size:11px;margin-bottom:5px}
+.field input,.field select,.field textarea{width:100%}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+.rowbtn{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.rowbtn .spacer{flex:1}
+
+textarea.code{min-height:180px;font-size:11.5px;line-height:1.7}
+.linkbox{background:#0e1116;border:1px solid var(--line);border-radius:6px;padding:8px 10px;
+  font-size:11px;line-height:1.7;word-break:break-all;white-space:pre-wrap;max-height:190px;overflow:auto}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+
+.dlist{display:flex;flex-direction:column;gap:6px}
+.drow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;border:1px solid var(--line);
+  border-radius:6px;padding:7px 9px;background:#0e1116;font-size:12px;min-width:0}
+.drow .grow{flex:1;min-width:120px;overflow-wrap:anywhere}
+.drow .dim{color:var(--dim);font-size:11px}
+
+.checklist{display:flex;flex-direction:column;gap:6px;max-height:230px;overflow:auto;
+  border:1px solid var(--line);border-radius:6px;padding:8px}
+.checklist label{display:flex;gap:8px;align-items:center;font-size:12px;cursor:pointer}
+
+.oplist{font-size:11px;line-height:1.6;max-height:260px;overflow:auto}
+.oplist .op{display:flex;gap:7px;padding:4px 0;border-bottom:1px dashed var(--line);
+  align-items:flex-start;flex-wrap:wrap}
+.oplist .op .t{color:var(--dim);flex:none}
+.oplist .op .a{font-weight:600;flex:none}
+.oplist .op .d{color:var(--dim);overflow-wrap:anywhere}
+.oplist .op .e{color:var(--bad);overflow-wrap:anywhere;flex-basis:100%}
+
+.warnline{color:var(--warn);font-size:11px;margin-top:6px;overflow-wrap:anywhere}
+.errline{color:var(--bad);font-size:11px;margin-top:6px;overflow-wrap:anywhere}
+.hintline{color:var(--dim);font-size:11px;margin-top:6px;overflow-wrap:anywhere}
+
+.spin{animation:rot 1s linear infinite}
+@keyframes rot{to{transform:rotate(360deg)}}
+
+/* hidden 属性要压过 .field{display:block} 这类作者样式 */
+[hidden]{display:none !important}
+
+/* 手机上把弹窗变成底部抽屉，好点按 */
+@media (max-width:640px){
+  header{padding:8px 12px;gap:10px}
+  header h1{font-size:12px}
+  header .links{display:none}
+  main{padding:10px 10px 60px}
+  .modal{padding:0;align-items:flex-end}
+  .sheet{width:100%;max-height:92vh;border-radius:10px 10px 0 0}
+  .sheet .head{border-radius:10px 10px 0 0}
+  .sheet .foot{border-radius:0;flex-wrap:wrap;padding:10px 10px 14px}
+  input[type=text],input[type=search],input[type=password],select,textarea{font-size:16px}
+  .row2,.row3{grid-template-columns:1fr}
+  .bar{gap:8px}
+  .bar h2{font-size:11px}
+  .card .acts button{flex:1;justify-content:center}
+  .kvgrid{grid-template-columns:1fr 1fr}
+}
+@media (max-width:380px){
+  .tabs button{padding:6px 9px;font-size:11px}
+}

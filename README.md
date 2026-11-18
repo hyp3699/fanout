@@ -6,14 +6,49 @@
 再按**分流规则**把同机 [sing-box](https://github.com/SagerNet/sing-box) 入站里指定**用户名**的部分流量
 （指定的域名、geosite / geoip 规则集）送进这些出口，比如只让奈飞走日本家宽，其余照旧直连。
 
-fanout 不建入站：入站由同机别的脚本（比如 sb.sh）管理，fanout 只读取它们、显示分享链接，
-并在自己的 `fanout-route.json` 里写分流规则。
+从 v1.3.0 起，网页面板也是 `hyp3699/kknnuonmkk` 里 `jiao/sing-box-08.sh` 的网页版：
+入站、订阅用户、Nginx、证书、Cloudflare、sing-box 服务都能在手机上点。
+它和脚本读写**同一套文件**（`/etc/sing-box/conf/*.json`、`/etc/sing-box/url/`、`/root/cert/`、
+`/etc/nginx/conf.d/`、`/etc/sing-box/token`），网页改完脚本菜单里直接能看到，反过来也一样。
+fanout 自己的分流配置仍然只写 `fanout-outbounds.json` 与 `fanout-route.json`。
 
 ![主界面](https://images.joeyblog.net/2026/7/27/fanout-dashboard.png)
 
 四条隧道跑在一台机器上，四个端口对应四个国家的出口，母机自己的 IP 不受影响：
 
 ![出口验证](https://images.joeyblog.net/2026/7/26/fanout-6-exit-ip.png)
+
+## 网页面板：六个标签页
+
+手机（Android Chrome，360–430px）优先：标签栏可以横向滑，卡片式列表，操作都在底部抽屉里，
+不会出现横向滚动。
+
+| 标签页 | 能做什么 |
+| --- | --- |
+| **出口隧道** | 新建（按地区/国家挑 VPN Gate 节点）、停止、换节点，SOCKS5 凭据，导出分享链接 |
+| **节点入站** | 14 种入站一键添加（VLESS Reality / Hysteria2 / TUIC / HTTP / gRPC / AnyTLS / SOCKS5 / XHTTP / Naive / VMess-WS / VLESS-WS…），改端口、换 UUID、改 Reality 域名、Hysteria2 端口跳跃与 Gecko 混淆、开 CDN、开固定隧道、开关临时隧道、看链接与配置、删除 |
+| **用户管理** | 添加多协议订阅用户（一个用户可挂多个入站）、订阅地址、重建协议、删除；每个用户的限速与流量限制 |
+| **分流规则** | 按用户名 + 域名/规则集把流量送进某个出口，顺序匹配 |
+| **Nginx与证书** | nginx 状态与重载、conf.d 站点查看/编辑/删除、一键生成反向代理站点（含 HTTPS 与 WebSocket）；证书列表与到期、acme.sh 申请（DNS-01）、Cloudflare Origin CA 15 年证书、删除；Cloudflare 凭证 |
+| **系统** | sing-box / nginx / fanout 状态与启停、近期日志；端口放行检查与一键补齐；可选出站（WARP `wireguard-out` 排在最前）；操作日志 |
+
+几个约定与脚本完全一致：
+
+- 入站文件 `{类型}-{编号}.json`，tag `{类型}-{编号}`，分享链接 `/etc/sing-box/url/{类型}-{编号}.txt`，
+  总订阅 `/etc/sing-box/sub.txt`；
+- 订阅用户 `/etc/sing-box/url/<用户名>/`（`<用户名>`、`-uuid`、`-sub`、`-path`），
+  Nginx 片段 `conf.d/singbox_users/<用户名>.conf` → `127.0.0.1:18080/sub/<用户名>`；
+- 端口放行写 `nft inet filter script_input` 链并持久化到 `/etc/nftables.conf`；
+- 临时隧道单元 `cf-quick-{类型}-{编号}.service`，域名从 `/etc/sing-box/quick/*.log` 提取，
+  守护定时器 `cf-quick-watchdog.timer`。
+
+所以：`sing-box-08.sh` 主菜单的 **18. 网页面板(开/关)** 一键开启后，屏幕上直接给出
+`http://IP:端口/路径/` 与访问口令；关掉只停服务，数据全留。
+
+**安全**：所有接口都在原有的登录会话后面；Cloudflare Token / Global Key 落盘 0600，
+接口只回前四位；域名、用户名、conf 文件名都做严格校验防路径穿越；
+改 sing-box / nginx 配置一律先 `sing-box check -C` / `nginx -t`，不通过自动回滚；
+删证书、删站点是挪进回收目录而不是 `rm -rf`。
 
 ## 用户限速 / 流量限制
 
