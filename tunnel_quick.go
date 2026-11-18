@@ -248,6 +248,12 @@ WantedBy=timers.target
 }
 
 // quickStart 启动（或重启）临时隧道，等 Cloudflare 分配域名后把链接更新。
+// systemdAvailable 判断是不是 systemd 系统。做成变量方便单测假装有 systemd。
+var systemdAvailable = func() bool {
+	st, err := os.Stat("/run/systemd/system")
+	return err == nil && st.IsDir()
+}
+
 func quickStart(file string) (*node, error) {
 	n, _, err := loadNode(file)
 	if err != nil {
@@ -258,7 +264,7 @@ func quickStart(file string) (*node, error) {
 	default:
 		return nil, fmt.Errorf("%s 类型的入站不支持临时隧道（只支持 WS / XHTTP 类）", n.Kind)
 	}
-	if st, err := os.Stat("/run/systemd/system"); err != nil || !st.IsDir() {
+	if !systemdAvailable() {
 		return nil, fmt.Errorf("临时隧道目前只支持 systemd 系统")
 	}
 	if err := quickInstallCloudflared(); err != nil {

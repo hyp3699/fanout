@@ -26,7 +26,7 @@ fanout 自己的分流配置仍然只写 `fanout-outbounds.json` 与 `fanout-rou
 | 标签页 | 能做什么 |
 | --- | --- |
 | **出口隧道** | 新建（按地区/国家挑 VPN Gate 节点）、停止、换节点，SOCKS5 凭据，导出分享链接 |
-| **节点入站** | 14 种入站一键添加（VLESS Reality / Hysteria2 / TUIC / HTTP / gRPC / AnyTLS / SOCKS5 / XHTTP / Naive / VMess-WS / VLESS-WS…），改端口、换 UUID、改 Reality 域名、Hysteria2 端口跳跃与 Gecko 混淆、开 CDN、开固定隧道、开关临时隧道、看链接与配置、删除 |
+| **节点入站** | 15 种入站一键添加（VLESS Reality / Hysteria2 / TUIC / HTTP / gRPC / AnyTLS / SOCKS5 / XHTTP / Naive / VMess-WS / VLESS-WS，以及脚本第 15 项「CF 临时隧道」：自动建 127.0.0.1:8101 的 VMess WS 并拉起 trycloudflare 隧道），改端口、换 UUID、改 Reality 域名、Hysteria2 端口跳跃与 Gecko 混淆、开 CDN、开固定隧道、开关临时隧道、看链接与配置、删除 |
 | **用户管理** | 添加多协议订阅用户（一个用户可挂多个入站）、订阅地址、重建协议、删除；每个用户的限速与流量限制 |
 | **分流规则** | 按用户名 + 域名/规则集把流量送进某个出口，顺序匹配 |
 | **Nginx与证书** | nginx 状态与重载、conf.d 站点查看/编辑/删除、一键生成反向代理站点（含 HTTPS 与 WebSocket）；证书列表与到期、acme.sh 申请（DNS-01）、Cloudflare Origin CA 15 年证书、删除；Cloudflare 凭证 |

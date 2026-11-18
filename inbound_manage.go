@@ -37,7 +37,11 @@ var nodeKindLabels = map[string]struct{ label, note string }{
 }
 
 func nodeKindOptions() []nodeKindOption {
-	out := make([]nodeKindOption, 0, len(nodeKinds))
+	out := make([]nodeKindOption, 0, len(nodeKinds)+1)
+	// 脚本「添加入站」的第 15 项：专用临时隧道（VMess WS 127.0.0.1:8101 + trycloudflare）
+	out = append(out, nodeKindOption{Kind: quickKindAlias,
+		Label: "CF 临时隧道（VMess WS）", Proto: "vmess", TLS: "none", Net: "tcp",
+		Note: "建 127.0.0.1:8101 的入站并立刻开 trycloudflare 隧道，域名每次重启都会变"})
 	for _, k := range nodeKinds {
 		info := nodeKindInfos[k]
 		meta := nodeKindLabels[k]

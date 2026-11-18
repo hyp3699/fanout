@@ -390,7 +390,12 @@ type nodeCreateSpec struct {
 	Domain   string `json:"domain"`    // CertMode=domain 时用它的证书
 	AddTLS   bool   `json:"add_tls"`   // ws / xhttp 类可选加证书
 	SNI      string `json:"sni"`       // Reality 伪装域名
+	Quick    bool   `json:"quick"`     // 建完立刻开临时隧道（脚本「添加临时隧道」那一项）
 }
+
+// quickKindAlias 把界面上的「CF 临时隧道」映射成它实际的入站类型。
+// 脚本的做法是建一条 127.0.0.1:8101 的 VMess WS，再挂 cf-quick-* 服务。
+const quickKindAlias = "cf-quick"
 
 // realitySites 是脚本内置的伪装域名，第 1 个是默认值。
 var realitySites = []string{
@@ -404,6 +409,10 @@ func defaultRealitySNI() string { return realitySites[6] }
 // buildInboundDoc 按脚本的模板生成一份入站配置。
 // 返回的 user 是主用户（脚本里第一个用户），链接就用它。
 func buildInboundDoc(spec nodeCreateSpec, number, port int) (map[string]any, nodeUser, error) {
+	if spec.Kind == quickKindAlias {
+		spec.Kind = "vmess-ws"
+		spec.Quick = true
+	}
 	info, ok := nodeKindInfos[spec.Kind]
 	if !ok {
 		return nil, nodeUser{}, fmt.Errorf("不支持的入站类型 %q", spec.Kind)
@@ -414,10 +423,15 @@ func buildInboundDoc(spec nodeCreateSpec, number, port int) (map[string]any, nod
 	userName := fmt.Sprintf("%s%d", info.UserBase, number)
 	tag := fmt.Sprintf("%s-%d", info.TagBase, number)
 
+	listen := "::"
+	if spec.Quick {
+		// 只给本机的 cloudflared 用，不对外暴露
+		listen = "127.0.0.1"
+	}
 	ib := map[string]any{
 		"type":        info.Proto,
 		"tag":         tag,
-		"listen":      "::",
+		"listen":      listen,
 		"listen_port": port,
 	}
 	user := nodeUser{Name: userName, UUID: uuid, Password: password}
@@ -597,6 +611,13 @@ func userMap(u nodeUser) map[string]any {
 
 // createNode 建入站：写配置 → 放行端口 → 写链接 → 重建订阅 → 重载。
 func createNode(spec nodeCreateSpec) (*node, error) {
+	if spec.Kind == quickKindAlias {
+		spec.Kind = "vmess-ws"
+		spec.Quick = true
+		if spec.Port == 0 {
+			spec.Port = 8101
+		}
+	}
 	info, ok := nodeKindInfos[spec.Kind]
 	if !ok {
 		return nil, fmt.Errorf("不支持的入站类型 %q", spec.Kind)
@@ -607,6 +628,7 @@ func createNode(spec nodeCreateSpec) (*node, error) {
 	}
 	port := spec.Port
 	if port == 0 {
+		// 临时隧道专用入站固定 8101（脚本也是这样），别的类型随机挑空闲端口
 		p, err := pickFreePort(info.Net)
 		if err != nil {
 			return nil, err
@@ -656,7 +678,15 @@ func createNode(spec nodeCreateSpec) (*node, error) {
 	n.PortOK["udp"] = contains(protos, "udp")
 
 	links := buildNodeLinks(n, user, nil)
-	if err := writeNodeLinks(n, links); err != nil {
+	if spec.Quick {
+		// 专用临时隧道入站只听 127.0.0.1，直连链接客户端连不上，
+		// 只留隧道链接（脚本 add_quick_tunnel_inbound 也是这样，先清空再写隧道链接）
+		links = nil
+		if err := writeFileAtomic(nodeURLFile(n), []byte(""), 0644); err != nil {
+			cleanup()
+			return nil, err
+		}
+	} else if err := writeNodeLinks(n, links); err != nil {
 		cleanup()
 		return nil, err
 	}
@@ -668,6 +698,18 @@ func createNode(spec nodeCreateSpec) (*node, error) {
 		n.Remark = err.Error()
 	}
 	n.Links = links
+
+	if spec.Quick {
+		// 与脚本 add_quick_tunnel_inbound 一样：写 dedicated 标记，直接把隧道拉起来
+		_ = os.MkdirAll(lp.QuickDir, 0755)
+		_ = writeFileAtomic(filepath.Join(lp.QuickDir, fmt.Sprintf("%s-%d.dedicated", n.Kind, n.Number)), nil, 0644)
+		started, err := quickStart(file)
+		if err != nil {
+			// 入站已经建好，隧道没起来也要能用（用户可以稍后在面板里再启动）
+			return n, fmt.Errorf("入站已创建（%s），但临时隧道没起来：%v", n.File, err)
+		}
+		return started, nil
+	}
 	return n, nil
 }
 

@@ -47,7 +47,8 @@ func TestNodesAPIListsAndCreates(t *testing.T) {
 		t.Fatalf("应该有 1 个节点: %+v", out)
 	}
 	kinds, _ := out["kinds"].([]any)
-	if len(kinds) != len(nodeKinds) {
+	// 14 种普通入站 + 「CF 临时隧道」伪类型（脚本的第 15 项）
+	if len(kinds) != len(nodeKinds)+1 {
 		t.Errorf("类型列表数量不对: %d", len(kinds))
 	}
 

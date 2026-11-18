@@ -232,3 +232,51 @@ func TestQuickResetCredsUsesXhttpPath(t *testing.T) {
 		t.Errorf("XHTTP 入站的路径后缀应该是 -xhttp: %s", path)
 	}
 }
+
+func TestCreateQuickTunnelInbound(t *testing.T) {
+	lp, fake := setupPanel(t)
+	// 假装 cloudflared 已装、systemd 可用、隧道已经拿到域名
+	_ = os.WriteFile(lp.QuickBin, []byte("#!/bin/sh\n"), 0755)
+	_ = os.WriteFile(filepath.Join(lp.QuickDir, "cf-quick-vmess-ws-1.log"),
+		[]byte("INF |  https://qt-test.trycloudflare.com  |\n"), 0644)
+	oldSystemd := systemdAvailable
+	systemdAvailable = func() bool { return true }
+	t.Cleanup(func() { systemdAvailable = oldSystemd })
+	fake.out["systemctl is-active"] = "active"
+
+	n, err := createNode(nodeCreateSpec{Kind: quickKindAlias, Quick: true})
+	if err != nil {
+		t.Fatalf("建临时隧道入站失败: %v", err)
+	}
+	if n.File != "vmess-ws-1.json" || n.Kind != "vmess-ws" {
+		t.Fatalf("应该建一条 vmess-ws 入站: %+v", n)
+	}
+	if n.Port != 8101 {
+		t.Errorf("临时隧道专用入站默认端口应该是 8101: %d", n.Port)
+	}
+	doc, _ := readNodeDoc(n.File)
+	if listen := str(firstInbound(doc)["listen"]); listen != "127.0.0.1" {
+		t.Errorf("只应监听本机: %q", listen)
+	}
+	if !pathExists(filepath.Join(lp.QuickDir, "vmess-ws-1.dedicated")) {
+		t.Error("应该写 dedicated 标记")
+	}
+	if !pathExists(filepath.Join(lp.QuickUnitDir, "cf-quick-vmess-ws-1.service")) {
+		t.Error("应该写 cf-quick 单元")
+	}
+	blob, _ := os.ReadFile(filepath.Join(lp.URLDir, "vmess-ws-1.txt"))
+	lines := strings.Fields(strings.TrimSpace(string(blob)))
+	if len(lines) != 1 {
+		t.Fatalf("专用隧道入站只该有一条隧道链接，实际 %d 条:\n%s", len(lines), blob)
+	}
+	vm, ok := decodeVmess(lines[0])
+	if !ok || str(vm["sni"]) != "qt-test.trycloudflare.com" || str(vm["port"]) != "443" {
+		t.Fatalf("隧道链接不对: %s", lines[0])
+	}
+	if n.QuickDomain != "qt-test.trycloudflare.com" {
+		t.Errorf("返回的节点应该带上隧道域名: %+v", n)
+	}
+	if !fake.has("systemctl restart cf-quick-vmess-ws-1") {
+		t.Error("应该启动隧道服务")
+	}
+}
