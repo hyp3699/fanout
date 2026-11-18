@@ -38,7 +38,7 @@ jobs:
       - name: 打包
         run: |
           tar czf "fanout-linux-${{ matrix.goarch }}.tar.gz" \
-            fanout install.sh f.sh fanout.service README.md
+            fanout install.sh fanout.service
 
       - uses: actions/upload-artifact@v4
         with:
