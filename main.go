@@ -115,44 +115,10 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", handleIndex)
-	mux.HandleFunc("/api/nodes", apiNodes(mgr))
-	mux.HandleFunc("/api/tunnels", apiTunnels(mgr))
-	mux.HandleFunc("/api/start", apiStart(mgr))
-	mux.HandleFunc("/api/stop", apiStop(mgr))
-	mux.HandleFunc("/api/swap", apiSwap(mgr))
-	mux.HandleFunc("/api/cred", apiCred(mgr))
-	mux.HandleFunc("/api/refresh", apiRefresh(mgr))
-	mux.HandleFunc("/api/regions", apiRegions(mgr))
-	mux.HandleFunc("/api/provision", apiProvision(mgr))
-	mux.HandleFunc("/api/jobs", apiJobs(mgr))
-	mux.HandleFunc("/api/jobs/dismiss", apiJobDismiss(mgr))
-	mux.HandleFunc("/api/exits", apiExits(mgr))
-	mux.HandleFunc("/api/backend", apiBackendStatus)
-	// 入站只读：fanout 不建、不改、不删入站，只列出配置目录里已有的
-	mux.HandleFunc("/api/inbounds", apiInbounds)
-	mux.HandleFunc("/api/inbounds/detail", apiInboundDetail)
-	mux.HandleFunc("/api/inbounds/links", apiInboundLinks)
-	// 分流规则
-	mux.HandleFunc("/api/rules", apiRules(mgr))
-	mux.HandleFunc("/api/rules/save", apiRuleSave(mgr))
-	mux.HandleFunc("/api/rules/delete", apiRuleDelete(mgr))
-	mux.HandleFunc("/api/rules/move", apiRuleMove(mgr))
-	mux.HandleFunc("/api/rules/enable", apiRuleEnable(mgr))
-	// 用户限速 / 流量限制（与 sing-box-08.sh 共用数据）
-	mux.HandleFunc("/api/users", apiUsers)
-	mux.HandleFunc("/api/users/speed", apiUserSpeed)
-	mux.HandleFunc("/api/users/traffic", apiUserTraffic)
-
-	// 网页面板扩展：入站读写、订阅用户、Nginx、证书、Cloudflare、系统
-	// （全部走同一个鉴权中间件，见 registerAdminAPI）
-	registerAdminAPI(mux)
+	registerCoreRoutes(mux, mgr)
 
 	srv := newWebServer(StripBasePath(auth.Wrap(mux)))
-	// 设置面板：改密码 / 改路径 / 改端口 / 改本地监听。
-	mux.HandleFunc("/api/settings", apiSettings(auth, srv))
-	mux.HandleFunc("/api/update/check", apiUpdateCheck)
-	mux.HandleFunc("/api/update/apply", apiUpdateApply)
+	registerSettingsRoutes(mux, auth, srv)
 
 	log.Printf("管理界面: http://<本机IP>%s%s/", webCfg.listenAddrString(), currentBasePath())
 	log.Printf("SOCKS5 端口在 %d-%d 之间随机分配", randPortMin, randPortMax)
@@ -199,6 +165,53 @@ func main() {
 	if err := srv.serve(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// registerCoreRoutes 挂上出口/分流/用户/面板扩展的全部接口。
+// 单独成函数是为了让测试能把整套路由注册一遍：路径重名在 ServeMux 里是启动即 panic。
+func registerCoreRoutes(mux *http.ServeMux, mgr *Manager) {
+	mux.HandleFunc("/", handleIndex)
+	// VPN Gate 节点列表。/api/nodes 已归网页面板的入站管理（admin_api.go），
+	// 两边同名会让 ServeMux 注册时直接 panic、服务起不来。
+	mux.HandleFunc("/api/vpngate/nodes", apiNodes(mgr))
+	mux.HandleFunc("/api/tunnels", apiTunnels(mgr))
+	mux.HandleFunc("/api/start", apiStart(mgr))
+	mux.HandleFunc("/api/stop", apiStop(mgr))
+	mux.HandleFunc("/api/swap", apiSwap(mgr))
+	mux.HandleFunc("/api/cred", apiCred(mgr))
+	mux.HandleFunc("/api/refresh", apiRefresh(mgr))
+	mux.HandleFunc("/api/regions", apiRegions(mgr))
+	mux.HandleFunc("/api/provision", apiProvision(mgr))
+	mux.HandleFunc("/api/jobs", apiJobs(mgr))
+	mux.HandleFunc("/api/jobs/dismiss", apiJobDismiss(mgr))
+	mux.HandleFunc("/api/exits", apiExits(mgr))
+	mux.HandleFunc("/api/backend", apiBackendStatus)
+	// 入站只读：fanout 不建、不改、不删入站，只列出配置目录里已有的
+	mux.HandleFunc("/api/inbounds", apiInbounds)
+	mux.HandleFunc("/api/inbounds/detail", apiInboundDetail)
+	mux.HandleFunc("/api/inbounds/links", apiInboundLinks)
+	// 分流规则
+	mux.HandleFunc("/api/rules", apiRules(mgr))
+	mux.HandleFunc("/api/rules/save", apiRuleSave(mgr))
+	mux.HandleFunc("/api/rules/delete", apiRuleDelete(mgr))
+	mux.HandleFunc("/api/rules/move", apiRuleMove(mgr))
+	mux.HandleFunc("/api/rules/enable", apiRuleEnable(mgr))
+	// 用户限速 / 流量限制（与 sing-box-08.sh 共用数据）
+	mux.HandleFunc("/api/users", apiUsers)
+	mux.HandleFunc("/api/users/speed", apiUserSpeed)
+	mux.HandleFunc("/api/users/traffic", apiUserTraffic)
+
+	// 网页面板扩展：入站读写、订阅用户、Nginx、证书、Cloudflare、系统
+	// （全部走同一个鉴权中间件，见 registerAdminAPI）
+	registerAdminAPI(mux)
+}
+
+// registerSettingsRoutes 挂上设置与更新接口（依赖 auth 和 srv，所以在 srv 建好后注册）。
+func registerSettingsRoutes(mux *http.ServeMux, auth *Auth, srv *webServer) {
+	// 设置面板：改密码 / 改路径 / 改端口 / 改本地监听。
+	mux.HandleFunc("/api/settings", apiSettings(auth, srv))
+	mux.HandleFunc("/api/update/check", apiUpdateCheck)
+	mux.HandleFunc("/api/update/apply", apiUpdateApply)
 }
 
 // initPanelCore 只做「面板自己能打开」所必需的三件事：访问口令、访问路径、Web 设置。
