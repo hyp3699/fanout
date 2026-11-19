@@ -294,7 +294,7 @@ func inboundUserMaps(ib map[string]any) []map[string]any {
 	users, _ := ib["users"].([]any)
 	out := make([]map[string]any, 0, len(users))
 	for _, u := range users {
-		if m := obj(u); m != nil {
+		if m := obj(u); m != nil && !isPlaceholderUser(m) {
 			out = append(out, m)
 		}
 	}
@@ -591,7 +591,52 @@ func buildInboundDoc(spec nodeCreateSpec, number, port int) (map[string]any, nod
 	default:
 		return nil, user, fmt.Errorf("这个入站类型网页暂不支持：%s", spec.Kind)
 	}
+	addPlaceholderUser(ib)
 	return map[string]any{"inbounds": []any{ib}}, user, nil
+}
+
+// placeholderUser 是脚本在每个入站里放的占位用户：真实用户到量被停用后
+// 入站也不会变成空用户（有的协议空 users 起不来，也没法再把人加回去）。
+// 网页上一律隐藏它。
+const placeholderUser = "tttttt"
+
+func isPlaceholderUser(m map[string]any) bool {
+	return str(m["name"]) == placeholderUser
+}
+
+// addPlaceholderUser 照第一个用户的字段形状补一个占位用户，凭据全部新生成。
+func addPlaceholderUser(ib map[string]any) {
+	if ib == nil || str(ib["type"]) == "shadowsocks" {
+		return
+	}
+	users, _ := ib["users"].([]any)
+	if len(users) == 0 {
+		return
+	}
+	for _, u := range users {
+		if m := obj(u); m != nil && isPlaceholderUser(m) {
+			return
+		}
+	}
+	first := obj(users[0])
+	if first == nil {
+		return
+	}
+	p := map[string]any{"name": placeholderUser}
+	for k, v := range first {
+		switch k {
+		case "name":
+		case "uuid":
+			p[k] = newUUID()
+		case "password":
+			p[k] = randomAPIKey(24)
+		case "username":
+			p[k] = "t" + randomHex(6)
+		default:
+			p[k] = v
+		}
+	}
+	ib["users"] = append(users, p)
 }
 
 func userMap(u nodeUser) map[string]any {

@@ -643,6 +643,7 @@ func quickSwitchProtocol(file, target string) (*node, error) {
 	ib["type"] = newProto
 	ib["tag"] = fmt.Sprintf("%s-%d", target, number)
 	ib["users"] = kept
+	addPlaceholderUser(ib)
 	ib["transport"] = map[string]any{
 		"type": "ws", "path": path,
 		"max_early_data": 2048, "early_data_header_name": "Sec-WebSocket-Protocol",

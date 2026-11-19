@@ -176,10 +176,11 @@ function nodeLimitText(n){
   const one = name => {
     const u = userLimitOf(name);
     if(!u) return '';
-    const sp = u.speed ? ('限速 ' + String(u.speed.text || u.speed.speed).replace(/（.*$/, '')) : '不限速';
-    const tr = u.traffic && u.traffic.enabled
-      ? ('流量 ' + fmtBytes(u.period_total) + '/' + fmtBytes(u.traffic.limit_bytes)) : '不限量';
-    return sp + ' ' + tr + (u.traffic && u.traffic.disabled_by_limit ? ' 已停用' : '');
+    const out = [];
+    if(u.speed) out.push('限速 ' + String(u.speed.text || u.speed.speed).replace(/（.*$/, ''));
+    if(u.traffic && u.traffic.enabled) out.push('流量 ' + fmtBytes(u.period_total) + '/' + fmtBytes(u.traffic.limit_bytes));
+    if(u.traffic && u.traffic.disabled_by_limit) out.push('已停用');
+    return out.join(' ');
   };
   if(!names.length) return '';
   if(names.length === 1){ const t = one(names[0]); return t ? ' · ' + t : ''; }

@@ -86,7 +86,7 @@ func inboundUserNames(ib map[string]any) []string {
 		if name == "" {
 			name = str(m["username"])
 		}
-		if name == "" || seen[name] {
+		if name == "" || seen[name] || name == placeholderUser {
 			continue
 		}
 		seen[name] = true
@@ -228,6 +228,9 @@ func (a *adoptedInbound) toNative() *nativeInbound {
 	for i, u := range users {
 		m := obj(u)
 		if m == nil {
+			continue
+		}
+		if isPlaceholderUser(m) {
 			continue
 		}
 		name := str(m["name"])
