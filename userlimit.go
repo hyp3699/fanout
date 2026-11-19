@@ -622,8 +622,9 @@ func setUserTraffic(name, input, period string) error {
 			return err
 		}
 		_ = requestPeriodReset(name)
-		if wasDisabled {
-			return restoreUser(name)
+		// 统计服务会按状态自动恢复；这里顺手立即恢复一次，失败也交给服务
+		if wasDisabled || (!userInInbounds(name) && dirExists(filepath.Join(umDisabledDir, name))) {
+			_ = restoreUser(name)
 		}
 		return nil
 	}
@@ -668,16 +669,16 @@ func setUserTraffic(name, input, period string) error {
 		"saved_user":        data["saved_user"],
 		"config_file":       data["config_file"],
 	}
-	if err := writeJSONFileAtomic(lf, out); err != nil {
+	// 先放清零请求再写限制：统计服务看到待清零就不会拿旧流量去判超量
+	if err := requestPeriodReset(name); err != nil {
 		return err
 	}
-	// 本周期流量清零交给 singbox-traffic 服务处理，避免和它同时写 state.json
-	if err := requestPeriodReset(name); err != nil {
+	if err := writeJSONFileAtomic(lf, out); err != nil {
 		return err
 	}
 	if !userInInbounds(name) {
 		if _, err := os.Stat(filepath.Join(umDisabledDir, name)); err == nil {
-			return restoreUser(name)
+			_ = restoreUser(name)
 		}
 	}
 	return nil
