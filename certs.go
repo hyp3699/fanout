@@ -514,6 +514,10 @@ if [[ -f /root/last_80_occupant.txt ]]; then
     [[ -n "$occupant" ]] && systemctl start "$occupant" >/dev/null 2>&1
     rm -f /root/last_80_occupant.txt
 fi
+for svc in nginx sing-box; do
+    systemctl is-enabled --quiet "$svc" 2>/dev/null && ! systemctl is-active --quiet "$svc" 2>/dev/null && systemctl start "$svc" >/dev/null 2>&1
+done
+exit 0
 `
 
 func issueIPCert(spec certIssueSpec) (*certItem, string, error) {
