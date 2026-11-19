@@ -204,6 +204,7 @@ function trafText(u){
 }
 
 function renderUsers(){
+  if(typeof renderNodes === 'function') try{ renderNodes(); }catch(e){}
   const box = $('#users');
   const list = users.users || [];
   $('#ucount').textContent = list.length ? list.length + ' 个' : '';

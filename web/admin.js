@@ -170,6 +170,23 @@ function renderNodes(){
   box.innerHTML = list.map(nodeCardHTML).join('');
 }
 
+// 卡片上的限速/流量摘要：一个用户直接写，多个用户按用户名分开
+function nodeLimitText(n){
+  const names = (n.users || []).map(u => u.name).filter(Boolean);
+  const one = name => {
+    const u = userLimitOf(name);
+    if(!u) return '';
+    const sp = u.speed ? ('限速 ' + String(u.speed.text || u.speed.speed).replace(/（.*$/, '')) : '不限速';
+    const tr = u.traffic && u.traffic.enabled
+      ? ('流量 ' + fmtBytes(u.period_total) + '/' + fmtBytes(u.traffic.limit_bytes)) : '不限量';
+    return sp + ' ' + tr + (u.traffic && u.traffic.disabled_by_limit ? ' 已停用' : '');
+  };
+  if(!names.length) return '';
+  if(names.length === 1){ const t = one(names[0]); return t ? ' · ' + t : ''; }
+  const parts = names.map(x => { const t = one(x); return t ? x + ' ' + t : ''; }).filter(Boolean);
+  return parts.length ? ' · ' + parts.join('；') : '';
+}
+
 function nodeCardHTML(n){
   {
     const users = (n.users || []).length;
@@ -178,7 +195,7 @@ function nodeCardHTML(n){
       + '<div class="top"><span class="name">' + esc(n.tag) + '</span>'
       + '<span class="badge">' + esc(n.protocol) + '</span>'
       + '<span class="badge acc">:' + n.port + '</span></div>'
-      + '<div class="sub">' + (n.remark ? esc(n.remark) + ' · ' : '') + users + ' 个用户' + esc(quick) + '</div>'
+      + '<div class="sub">' + (n.remark ? esc(n.remark) + ' · ' : '') + users + ' 个用户' + esc(nodeLimitText(n)) + esc(quick) + '</div>'
       + '<div class="nrow"><div class="nbadges">' + nodeBadges(n) + '</div>'
       + '<div class="nacts">'
       + '<button data-nact="manage">管理</button>'
@@ -666,15 +683,12 @@ function renderNginx(){
     const names = (s.server_names || []).join(' ');
     const target = (s.proxy_pass || [])[0] || '';
     return '<div class="card" data-site="' + esc(s.name) + '" data-usersite="' + (s.user_site ? '1' : '0') + '">'
-      + '<div class="top"><span class="name">' + esc(s.name) + '</span>'
+      + '<div class="nrow" style="margin-top:0"><div class="nbadges"><span class="name">' + esc(s.name) + '</span>'
       + (s.protected ? tag('warn', '脚本维护') : '')
       + (s.user_site ? tag('', '订阅片段') : '')
-      + '</div>'
+      + '</div><div class="nacts"><button data-gact="edit">编辑</button></div></div>'
       + '<div class="sub">' + esc(listen || '—') + (names ? ' · ' + esc(names) : '')
-      + (target ? ' → ' + esc(target) : '') + '</div>'
-      + '<div class="acts"><button data-gact="edit">编辑</button>'
-      + (s.protected ? '' : '<button class="danger" data-gact="del">删除</button>')
-      + '</div></div>';
+      + (target ? ' → ' + esc(target) : '') + '</div></div>';
   }).join('') || '<div class="empty small">conf.d 里还没有站点</div>';
 }
 
