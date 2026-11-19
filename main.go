@@ -117,10 +117,10 @@ func main() {
 	mux := http.NewServeMux()
 	registerCoreRoutes(mux, mgr)
 
-	srv := newWebServer(StripBasePath(auth.Wrap(mux)))
+	srv := newWebServer(httpsOnly(StripBasePath(auth.Wrap(mux))))
 	registerSettingsRoutes(mux, auth, srv)
 
-	log.Printf("管理界面: http://<本机IP>%s%s/", webCfg.listenAddrString(), currentBasePath())
+	log.Printf("管理界面只监听 %s，经 nginx HTTPS 反代访问（路径 %s/）", webCfg.listenAddrString(), currentBasePath())
 	log.Printf("SOCKS5 端口在 %d-%d 之间随机分配", randPortMin, randPortMax)
 
 	// 节点列表、上次的隧道、健康检查全部在后台跑。
@@ -380,7 +380,6 @@ func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 		Password        *string `json:"password"`         // 非空则改口令
 		BasePath        *string `json:"base_path"`        // 提供即改访问路径（空串=去掉前缀）
 		Port            *int    `json:"port"`             // 提供即改监听端口
-		ListenAddr      *string `json:"listen_addr"`      // 提供即改监听地址
 		ResidentialOnly *bool   `json:"residential_only"` // 提供即改"只用家宽"
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -427,30 +426,24 @@ func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 				}
 			}
 			// 改端口 / 监听地址：合成一份新的 WebSettings 一起应用，避免绑两次
-			if in.Port != nil || in.ListenAddr != nil {
+			if in.Port != nil {
 				next := getWebSettings()
-				if in.Port != nil {
-					next.Port = *in.Port
-				}
-				if in.ListenAddr != nil {
-					next.ListenAddr = *in.ListenAddr
-				}
+				next.Port = *in.Port
 				if err := srv.applyWebSettings(next); err != nil {
 					writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+					return
+				}
+				if err := repointPanelNginx(next.Port); err != nil {
+					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 					return
 				}
 			}
 		}
 
 		cfg := getWebSettings()
-		listen := cfg.ListenAddr
-		if listen == "" {
-			listen = "0.0.0.0"
-		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"base_path":        currentBasePath(),
 			"port":             cfg.Port,
-			"listen_addr":      listen,
 			"has_password":     true,
 			"username":         auth.Username(),
 			"totp":             auth.TOTPEnabled(),

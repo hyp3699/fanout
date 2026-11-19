@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"net"
 	"os"
@@ -545,4 +546,30 @@ func pruneDanglingSites() {
 			}
 		}
 	}
+}
+
+// panelNginxConf 是脚本给面板写的反代站点。
+var panelNginxConf = "/etc/nginx/conf.d/fanout-panel.conf"
+
+var reProxyLocal = regexp.MustCompile(`proxy_pass http://127\.0\.0\.1:[0-9]+;`)
+
+// repointPanelNginx 改端口后把面板反代指向新端口并重载 nginx（没配反代就不动）。
+func repointPanelNginx(port int) error {
+	blob, err := os.ReadFile(panelNginxConf)
+	if err != nil {
+		return nil
+	}
+	next := reProxyLocal.ReplaceAll(blob, []byte(fmt.Sprintf("proxy_pass http://127.0.0.1:%d;", port)))
+	if bytes.Equal(next, blob) {
+		return nil
+	}
+	if err := writeFileAtomic(panelNginxConf, next, 0644); err != nil {
+		return err
+	}
+	if err := nginxApply(); err != nil {
+		_ = writeFileAtomic(panelNginxConf, blob, 0644)
+		_ = nginxApply()
+		return err
+	}
+	return nil
 }

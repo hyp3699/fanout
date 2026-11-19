@@ -854,7 +854,6 @@ $('#settingsBtn').onclick = async () => {
     renderTOTP(!!s.totp);
     $('#sessCount').textContent = '当前 ' + (s.sessions || 1) + ' 个';
     $('#setPort').value = s.port || '';
-    $('#setListen').value = s.listen_addr || '0.0.0.0';
     $('#setResi').checked = s.residential_only !== false;
     $('#setPathHint').textContent = '界面挂在这个路径下，扫端口的探不到。只能用字母数字和 - _。';
     $('#updCur').textContent = s.version || '-';
@@ -914,12 +913,6 @@ $('#updApply').onclick = async e => {
   }
 };
 
-// 端口/监听地址变了要提示用户之后从新地址进；密码/路径可原地生效
-function nextURL(port, listen, path){
-  const host = (listen && listen !== '0.0.0.0') ? listen : location.hostname;
-  return location.protocol + '//' + host + ':' + port + (path ? '/' + path : '') + '/';
-}
-
 $('#setSave').onclick = async e => {
   e.target.disabled = true;
   const body = {};
@@ -930,11 +923,9 @@ $('#setSave').onclick = async e => {
   body.base_path = $('#setPath').value.trim();
   const port = parseInt($('#setPort').value.trim(), 10);
   if(port) body.port = port;
-  body.listen_addr = $('#setListen').value;
   body.residential_only = $('#setResi').checked;
 
-  const portChanged = curSettings && (port !== curSettings.port
-    || body.listen_addr !== (curSettings.listen_addr || '0.0.0.0'));
+  const portChanged = curSettings && port !== curSettings.port;
 
   try{
     await api('/api/settings', {
@@ -943,10 +934,8 @@ $('#setSave').onclick = async e => {
       body: JSON.stringify(body),
     });
     if(portChanged){
-      const url = nextURL(port, body.listen_addr, body.base_path);
-      $('#setPortHint').innerHTML = '监听已切换，请从新地址打开：<a href="' + esc(url) + '">' + esc(url) + '</a>';
-      toast('监听已切换，用新地址重新打开');
-      // 端口变了当前连接会断，不自动跳转，让用户看清新地址
+      toast('端口已切换');
+      setTimeout(() => location.reload(), 1500);
     } else {
       toast('已保存');
       // 路径可能变了，重新加载到新路径下

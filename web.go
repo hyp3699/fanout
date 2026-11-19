@@ -445,13 +445,8 @@ const indexTemplate = `<!DOCTYPE html>
       <div class="setrow">
         <label class="f" style="margin:0"><span>监听端口</span>
           <input id="setPort" type="text" inputmode="numeric" spellcheck="false"></label>
-        <label class="f" style="margin:0"><span>本地监听地址</span>
-          <select id="setListen">
-            <option value="0.0.0.0">所有网卡（0.0.0.0）</option>
-            <option value="127.0.0.1">仅本机（127.0.0.1）</option>
-          </select></label>
       </div>
-      <div class="hint bad" id="setPortHint">改端口或监听地址会切换监听，保存后要用新地址重新打开界面。</div>
+      <div class="hint bad" id="setPortHint">改端口后 nginx 反代会跟着改。</div>
 
       <div class="updsec">
         <div class="updrow">
@@ -608,28 +603,31 @@ const indexTemplate = `<!DOCTYPE html>
       </button>
     </div>
     <div class="body">
-      <label class="field"><span>模式</span>
+      <label class="field"><span>申请方式</span>
+          <select id="ciAuth">
+            <option value="token">Cloudflare API Token</option>
+            <option value="global">Cloudflare 邮箱 + Global API Key</option>
+            <option value="ip">IP 证书</option>
+          </select></label>
+      <label class="field" id="ciIPWrap"><span>IP</span><select id="ciIP"></select></label>
+      <div id="ciCredWrap">
+        <label class="field" id="ciTokWrap"><span>API Token</span><input id="ciTok" type="password" autocomplete="off" spellcheck="false"></label>
+        <div class="row2" id="ciGlobWrap"><label class="field"><span>邮箱</span><input id="ciMail" type="text" autocomplete="off" spellcheck="false"></label>
+        <label class="field"><span>Global API Key</span><input id="ciKey" type="password" autocomplete="off" spellcheck="false"></label></div>
+        <label class="chk" style="margin-bottom:12px"><input type="checkbox" id="ciSave"> 保存凭证</label>
+        <button type="button" id="ciVerify">验证</button>
+      </div>
+      <div id="ciDomWrap">
+        <label class="field"><span>模式</span>
           <select id="ciMode">
-            <option value="ip">IP 证书（Let's Encrypt，自动续期）</option>
             <option value="root">根域名</option>
             <option value="sub" selected>子域名前缀</option>
             <option value="wildcard">泛域名</option>
             <option value="origin_ca">Cloudflare Origin CA（15 年）</option>
           </select></label>
-      <label class="field" id="ciIPWrap"><span>IP</span><select id="ciIP"></select></label>
-      <div id="ciCFWrap">
-      <details class="cfonce" id="ciOnce"><summary>临时使用 Cloudflare 凭证（用完即删，不保存）</summary>
-        <label class="field"><span>API Token</span><input id="ciTok" type="password" autocomplete="off" spellcheck="false" placeholder="留空则用已保存的凭证"></label>
-        <div class="row2"><label class="field"><span>或：登录邮箱</span><input id="ciMail" type="text" autocomplete="off" spellcheck="false"></label>
-        <label class="field"><span>Global API Key</span><input id="ciKey" type="password" autocomplete="off" spellcheck="false"></label></div>
-        <button type="button" id="ciLoad">用这个凭证读取域名</button>
-      </details>
-      <label class="field"><span>Cloudflare 域名</span><select id="ciZone"></select></label>
-      <div class="row2">
-        <label class="field"><span>前缀（子域名时填）</span>
-          <input id="ciPrefix" type="text" placeholder="node"></label>
-      </div>
-      <label class="chk" style="margin-bottom:12px"><input type="checkbox" id="ciWild"> Origin CA 申请泛域名</label>
+        <label class="field"><span>Cloudflare 域名</span><select id="ciZone"></select></label>
+        <label class="field" id="ciPrefixWrap"><span>前缀</span><input id="ciPrefix" type="text" placeholder="node"></label>
+        <label class="chk" id="ciWildWrap" style="margin-bottom:12px"><input type="checkbox" id="ciWild"> 泛域名</label>
       </div>
       <textarea id="ciLog" class="code" spellcheck="false" hidden></textarea>
     </div>

@@ -107,7 +107,11 @@ let tick = 0;
 function onPollTick(){
   tick++;
   const modalOpen = document.querySelector('.modal.open');
-  if(modalOpen) return;
+  // 节点面板开着也要刷新：临时隧道换域名后面板里的域名和链接跟着变
+  if(modalOpen){
+    if(modalOpen.id === 'nodesheet' && nodeCur && nodeCur.quick && tick % 3 === 0) loadNodes(true);
+    return;
+  }
   // poll 每 3 秒一次；节点要读 nft 和证书目录，别跟着每 3 秒跑一遍
   if(curTab === 'nodes' && tick % 4 === 0) loadNodes(true);
   if(curTab === 'subs' && tick % 3 === 0) loadSubs(true);
@@ -131,6 +135,8 @@ async function loadNodes(quiet){
       const n = (d.nodes || []).find(x => x.file === nodeCur.file);
       if(n) nodeCur = Object.assign(nodeCur, {quick_on: n.quick_on, quick_domain: n.quick_domain,
         port_ok: n.port_ok, cdn_domains: n.cdn_domains, links: n.links, hop_on: n.hop_on, obfs_on: n.obfs_on});
+      if(n && $('#nQuickDom')) $('#nQuickDom').textContent = n.quick_domain || '还没有分配域名';
+      if(n && $('#nLinks')) $('#nLinks').textContent = (n.links || []).join('\n') || '（还没有链接文件）';
     }
   }catch(e){ if(!quiet) toast('读取节点失败', true); }
 }
@@ -371,7 +377,7 @@ function nodeSheetHTML(n, config){
       + '<div class="rowbtn"><button class="primary" id="nTunOn">开启隧道</button></div></div>') : '')
 
     + (canQuick ? ('<div class="sec"><h3>临时隧道' + (n.quick_on ? tag('acc', '运行中') : tag('', '未运行')) + '</h3>'
-      + '<div class="hintline mono">' + esc(n.quick_domain || '还没有分配域名') + '</div>'
+      + '<div class="hintline mono" id="nQuickDom">' + esc(n.quick_domain || '还没有分配域名') + '</div>'
       + '<div class="rowbtn" style="margin-top:9px">'
       + '<button class="primary" id="nQuickStart">' + (n.quick_on ? '重启（换域名）' : '启动') + '</button>'
       + (n.quick_on ? '<button class="danger" id="nQuickStop">停止</button>' : '')
@@ -841,22 +847,73 @@ async function submitProxy(){
   loadInfra();
 }
 
+// 申请证书：先选方式（Token / 邮箱+Key / IP）。CF 方式有保存的同类凭证就直接选域名，
+// 没有就先填凭证验证，验证过才出域名；IP 证书不需要凭证。
+var ciOK = false;
+function ciSavedOK(){
+  const cf = infraState.cf || {};
+  return cf.configured && cf.valid !== false && (cf.kind || 'token') === $('#ciAuth').value;
+}
 function syncCertMode(){
-  const ip = $('#ciMode').value === 'ip';
+  const auth = $('#ciAuth').value, ip = auth === 'ip';
+  const ready = !ip && (ciOK || ciSavedOK());
   $('#ciIPWrap').hidden = !ip;
-  $('#ciCFWrap').hidden = ip;
+  $('#ciCredWrap').hidden = ip || ready;
+  $('#ciTokWrap').hidden = auth !== 'token';
+  $('#ciGlobWrap').hidden = auth !== 'global';
+  $('#ciDomWrap').hidden = !ready;
+  const m = $('#ciMode').value;
+  $('#ciPrefixWrap').hidden = m !== 'sub';
+  $('#ciWildWrap').hidden = m !== 'origin_ca';
+  $('#ciGo').disabled = !(ip || ready);
+}
+function ciReset(){
+  ciOK = false;
+  clearCFOnce('ci');
+  if(ciSavedOK()) fillZoneSelect('#ciZone');
+  syncCertMode();
+}
+async function ciVerify(){
+  const btn = $('#ciVerify');
+  const body = cfOnceBody('ci');
+  if($('#ciAuth').value === 'token') delete body.cf_email, delete body.cf_key;
+  else delete body.cf_token;
+  if(!body.cf_token && !(body.cf_email && body.cf_key)) return toast('先填凭证', true);
+  btn.disabled = true; btn.textContent = '验证中…';
+  try{
+    if($('#ciSave').checked){
+      const save = {action: 'save', kind: $('#ciAuth').value};
+      if(save.kind === 'token') save.token = body.cf_token;
+      else { save.email = body.cf_email; save.key = body.cf_key; }
+      const d = await postJSON('/api/cf/cred', save);
+      if(d.error) return toast(d.error, true);
+      clearCFOnce('ci');
+      await loadInfra();
+      if(!ciSavedOK()) return toast((infraState.cf && infraState.cf.error) || '凭证无效', true);
+      fillZoneSelect('#ciZone');
+    } else {
+      const d = await postJSON('/api/cf/zones', body);
+      if(d.error) return toast(d.error, true);
+      $('#ciZone').innerHTML = (d.zones || []).map(z => '<option>' + esc(z.name || z) + '</option>').join('')
+        || '<option value="">这个凭证下没有域名</option>';
+      ciOK = true;
+    }
+    syncCertMode();
+  } finally { btn.disabled = false; btn.textContent = '验证'; }
 }
 function openCertIssue(){
-  clearCFOnce('ci');
   const ip = nodesState.public_ip || '';
   $('#ciIP').innerHTML = ip ? '<option>' + esc(ip) + '</option>' : '<option value="">（没读到公网 IP）</option>';
+  $('#ciAuth').value = (infraState.cf && infraState.cf.configured && infraState.cf.kind) || 'token';
+  $('#ciAuth').onchange = ciReset;
   $('#ciMode').onchange = syncCertMode;
-  fillZoneSelect('#ciZone');
   $('#ciMode').value = 'sub';
-  syncCertMode();
+  $('#ciSave').checked = false;
   $('#ciPrefix').value = '';
+  $('#ciWild').checked = false;
   $('#ciLog').value = '';
   $('#ciLog').hidden = true;
+  ciReset();
   openModal('certnew');
 }
 
@@ -867,14 +924,14 @@ async function submitCertIssue(){
   btn.textContent = '申请中…（可能要 1-2 分钟）';
   const d = await postJSON('/api/certs/issue', Object.assign({
     zone: $('#ciZone').value,
-    mode: $('#ciMode').value,
+    mode: $('#ciAuth').value === 'ip' ? 'ip' : $('#ciMode').value,
     prefix: $('#ciPrefix').value.trim(),
     wildcard: $('#ciWild').checked,
     ip: $('#ciIP').value
-  }, $('#ciMode').value === 'ip' ? {} : cfOnceBody('ci')));
-  clearCFOnce('ci');
+  }, $('#ciAuth').value === 'ip' ? {} : cfOnceBody('ci')));
   btn.disabled = false;
   btn.textContent = old;
+  if(!d.error) clearCFOnce('ci');
   if(d.error){
     $('#ciLog').value = d.error;
     $('#ciLog').hidden = false;
@@ -1048,7 +1105,7 @@ function initAdmin(){
     toast('临时隧道已建好');
     loadNodes();
   };
-  $('#ciLoad').onclick = () => cfOnceLoadZones('ci', ['#ciZone']);
+  $('#ciVerify').onclick = ciVerify;
   $('#nodeRefresh').onclick = () => loadNodes();
   $('#ncKind').onchange = updateKindFields;
   $('#ncCancel').onclick = () => closeModal('nodecreate');

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -133,6 +134,22 @@ func validatePort(p int) error {
 }
 
 // listenAddrString 拼出 net.Listen 用的地址串。
+// 面板只监听本机，外面一律经 nginx HTTPS 反代进来。
 func (s WebSettings) listenAddrString() string {
-	return net.JoinHostPort(s.ListenAddr, strconv.Itoa(s.Port))
+	return net.JoinHostPort(panelListenHost, strconv.Itoa(s.Port))
+}
+
+const panelListenHost = "127.0.0.1"
+
+// httpsOnly 拒绝明文 HTTP：只放行 nginx 带 X-Forwarded-Proto: https 转来的请求，
+// 以及脚本在本机带 X-Fanout-Local 调的接口（由 auth 再校验令牌）。
+func httpsOnly(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") ||
+			(r.Header.Get("X-Fanout-Local") != "" && fromLoopback(r)) {
+			h.ServeHTTP(w, r)
+			return
+		}
+		http.Error(w, "仅支持 HTTPS 访问", http.StatusForbidden)
+	})
 }
