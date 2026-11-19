@@ -259,6 +259,16 @@ func trafficReady() bool {
 	return true
 }
 
+// ensureTrafficService 统计服务没在跑就拉起来：它停着流量限制就不会生效。
+func ensureTrafficService() {
+	if !hasCmd("systemctl") || !dirExists("/run/systemd/system") {
+		return
+	}
+	if exec.Command("systemctl", "is-active", "--quiet", umTrafficService).Run() != nil {
+		_ = exec.Command("systemctl", "enable", "--now", umTrafficService).Run()
+	}
+}
+
 var speedReadyCache struct {
 	sync.Mutex
 	key string
@@ -580,6 +590,7 @@ func setUserTraffic(name, input, period string) error {
 	if !trafficReady() {
 		return fmt.Errorf("没有检测到流量统计服务 %s，流量限制需要先用 sb.sh 安装", umTrafficService)
 	}
+	ensureTrafficService()
 	switch period {
 	case "day", "month", "none":
 	default:
@@ -675,6 +686,9 @@ func setUserTraffic(name, input, period string) error {
 // ---- HTTP ----
 
 func apiUsers(w http.ResponseWriter, r *http.Request) {
+	if trafficReady() {
+		ensureTrafficService()
+	}
 	writeJSON(w, http.StatusOK, listUsers())
 }
 
