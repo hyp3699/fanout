@@ -110,8 +110,12 @@ ctx.nodesState = {
   }, {
     file: 'hysteria2-1.json', kind: 'hysteria2', number: 1, tag: 'hysteria2-1',
     protocol: 'hysteria2', port: 23457, users: [], port_ok: { tcp: false, udp: false },
-    cdn_domains: ['cdn.example.com'], quick: true, quick_on: true, quick_domain: 'a.trycloudflare.com',
+    cdn_domains: ['cdn.example.com'], quick: false,
     hop_on: true, obfs_on: true, links: [],
+  }, {
+    file: 'vmess-ws-1.json', kind: 'vmess-ws', number: 1, tag: 'vmess-ws-1',
+    protocol: 'vmess', port: 8101, listen: '127.0.0.1', users: [{ name: 'u1', uuid: 'y' }], port_ok: { tcp: true, udp: false },
+    cdn_domains: [], quick: true, quick_on: true, quick_domain: 'a.trycloudflare.com', links: [],
   }],
   kinds: [{ kind: 'vless-reality', label: 'VLESS Reality', proto: 'vless', tls: 'reality', net: 'tcp', note: '最常用' }],
   reality_sites: ['www.iij.ad.jp'],
@@ -122,10 +126,15 @@ const nodeHTML = el('#nodes').innerHTML;
 assert(nodeHTML.includes('vless-reality-1'), '节点卡片显示 tag');
 assert(nodeHTML.includes('TCP 已放行'), '节点卡片显示端口放行状态');
 assert(nodeHTML.includes('UDP 未放行'), 'hy2 未放行时标红');
-assert(nodeHTML.includes('临时隧道'), '临时隧道标记');
+assert(el('#quicknodes').innerHTML.includes('隧道运行中'), '临时隧道标记');
 assert(nodeHTML.includes('CDN'), 'CDN 标记');
-assert(nodeHTML.includes('a.trycloudflare.com'), '隧道域名显示');
-assert(el('#ncount').textContent.includes('2'), '节点数量统计');
+assert(el('#ncount').textContent.includes('2'), '节点数量统计（临时隧道不计入普通节点）');
+const qSheet = ctx.nodeSheetHTML(ctx.nodesState.nodes[2], '{}');
+assert(qSheet.includes('临时隧道') && !qSheet.includes('修改端口') && !qSheet.includes('开启 CDN'), '临时隧道面板只放隧道相关');
+const rSheet = ctx.nodeSheetHTML(ctx.nodesState.nodes[0], '{}');
+assert(!rSheet.includes('nQuickStart'), '普通节点面板里没有临时隧道');
+assert(el('#qcount').textContent.includes('1'), '临时隧道单独一栏');
+assert(!el('#nodes').innerHTML.includes('a.trycloudflare.com') && el('#quicknodes').innerHTML.includes('a.trycloudflare.com'), '临时隧道不混在普通节点里');
 
 // ---- 后端详情面板 ----
 const sheet = ctx.nodeSheetHTML(ctx.nodesState.nodes[0], '{}');
@@ -177,7 +186,6 @@ ctx.renderSystem();
 assert(el('#sysinfo').innerHTML.includes('1.14.4'), '系统信息显示 sing-box 版本');
 assert(el('#services').innerHTML.includes('运行 1天 02小时'), '服务运行时长');
 assert(el('#firewall').innerHTML.includes('未放行'), '端口未放行提示');
-assert(el('#outbounds').innerHTML.includes('WARP 换出口'), 'WARP 出站标注');
 ctx.renderOplog([{ time: '01-02 03:04', action: '添加入站', detail: 'vless-ws', ok: true }]);
 assert(el('#oplog').innerHTML.includes('添加入站'), '操作日志渲染');
 

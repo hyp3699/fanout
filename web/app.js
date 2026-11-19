@@ -16,6 +16,7 @@ const ICON = {
 // 界面挂在随机前缀下，请求一律走相对路径
 async function api(path, opts){
   const r = await fetch(path.replace(/^\//, ''), opts);
+  if(r.status === 401){ location.reload(); throw new Error('登录已过期'); }
   const d = await r.json().catch(()=>({}));
   if(!r.ok) throw new Error(d.error || ('HTTP '+r.status));
   return d;
@@ -222,7 +223,7 @@ function renderUsers(){
       + '<span class="rcond">已用 ' + esc(fmtBytes(u.total)) + (u.rules ? ' ｜ 分流 ' + u.rules + ' 条' : '') + '</span>'
       + '<span class="uinfo' + (tbad ? ' bad' : '') + '">流量 ' + esc(trafText(u)) + '</span>'
       + '<span class="uinfo">限速 ' + esc(sp) + '</span>'
-      + '<span class="acts"><button class="icon" data-user="' + esc(u.name) + '" title="限速 / 流量限制">'
+      + '<span class="acts"><button class="icon" data-ulimit="' + esc(u.name) + '" title="限速 / 流量限制">'
       +   '<svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></button></span>'
       + '</div>';
   }).join('');
@@ -250,10 +251,18 @@ function fillUser(){
   $('#utrafdel').disabled = !u.traffic;
 }
 
-function openUser(name){
+// 限速/流量弹窗。after：保存后回调（节点面板据此刷新自己）
+let userAfter = null;
+async function openUser(name, after){
   curUser = name;
-  const u = (users.users || []).find(x => x.name === name);
-  if(!u){ toast('这个用户不在了', true); return; }
+  userAfter = after || null;
+  let u = (users.users || []).find(x => x.name === name);
+  if(!u){
+    // 列表可能还没拉到或刚加的用户，先刷新一次再找
+    try{ users = await api('/api/users'); renderUsers(); }catch(e){}
+    u = (users.users || []).find(x => x.name === name);
+  }
+  if(!u){ toast('入站里还没有这个用户，先把他挂到入站上', true); return; }
   $('#uspeed').value = u.speed ? (u.speed.speed.match(/^\d+MB$/) ? u.speed.speed.slice(0, -2) : u.speed.speed) : '';
   $('#umode').value = u.speed ? u.speed.mode : 'bidirectional';
   $('#ulimit').value = u.traffic && u.traffic.enabled
@@ -264,8 +273,8 @@ function openUser(name){
   openModal('userbox');
 }
 document.addEventListener('click', e => {
-  const b = e.target.closest('[data-user]');
-  if(b) openUser(b.dataset.user);
+  const b = e.target.closest('[data-ulimit]');
+  if(b && !b.closest('#nodebody')) openUser(b.dataset.ulimit);
 });
 
 async function userPost(path, body, btn, ok){
@@ -273,6 +282,8 @@ async function userPost(path, body, btn, ok){
   try{
     await api(path, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
     users = await api('/api/users'); renderUsers(); fillUser();
+    if(typeof renderSubs === 'function') renderSubs();
+    if(userAfter) userAfter();
     toast(ok);
   }catch(err){ toast(err.message, true); }
   btn.disabled = false;
@@ -780,6 +791,54 @@ async function loadBackendModes(){
   }catch(err){ hint.textContent = err.message; }
 }
 
+function renderTOTP(on){
+  $('#totpState').innerHTML = on ? '<span class="badge ok">已开启</span>' : '<span class="badge">未开启</span>';
+  $('#totpBegin').hidden = on;
+  $('#totpOff').hidden = !on;
+  $('#totpConfirm').hidden = true;
+  $('#totpSetup').hidden = true;
+  $('#totpCode').value = '';
+}
+$('#totpBegin').onclick = async () => {
+  try{
+    const d = await api('/api/settings/totp', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({action:'begin'})});
+    $('#totpSecret').textContent = d.secret;
+    $('#totpLink').href = d.uri;
+    $('#totpSetup').hidden = false;
+    $('#totpBegin').hidden = true;
+    $('#totpConfirm').hidden = false;
+    $('#totpCode').focus();
+  }catch(err){ toast(err.message, true); }
+};
+$('#totpConfirm').onclick = async () => {
+  try{
+    await api('/api/settings/totp', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({action:'confirm', code: $('#totpCode').value.trim()})});
+    renderTOTP(true); toast('两步验证已开启，其他浏览器已下线');
+  }catch(err){ toast(err.message, true); }
+};
+$('#totpOff').onclick = async () => {
+  const code = $('#totpCode').value.trim();
+  if(!code){ toast('先填当前的 6 位验证码', true); return; }
+  try{
+    await api('/api/settings/totp', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({action:'disable', code})});
+    renderTOTP(false); toast('两步验证已关闭');
+  }catch(err){ toast(err.message, true); }
+};
+$('#sessKick').onclick = async () => {
+  try{
+    const d = await api('/api/settings/sessions', {method:'POST'});
+    $('#sessCount').textContent = '当前 ' + d.sessions + ' 个';
+    toast('其他浏览器已下线');
+  }catch(err){ toast(err.message, true); }
+};
+$('#logoutBtn').onclick = async () => {
+  if(!confirm('退出登录？')) return;
+  try{ await fetch('logout', {method:'POST'}); }catch(e){}
+  location.reload();
+};
+
 $('#settingsBtn').onclick = async () => {
   $('#setPw').value = '';
   $('#setPath').value = '';
@@ -790,6 +849,9 @@ $('#settingsBtn').onclick = async () => {
     const s = await api('/api/settings');
     curSettings = s;
     $('#setPath').value = (s.base_path || '').replace(/^\//, '');
+    $('#setUser').value = s.username || '';
+    renderTOTP(!!s.totp);
+    $('#sessCount').textContent = '当前 ' + (s.sessions || 1) + ' 个';
     $('#setPort').value = s.port || '';
     $('#setListen').value = s.listen_addr || '0.0.0.0';
     $('#setResi').checked = s.residential_only !== false;
@@ -862,6 +924,8 @@ $('#setSave').onclick = async e => {
   const body = {};
   const pw = $('#setPw').value.trim();
   if(pw) body.password = pw;
+  const un = $('#setUser').value.trim();
+  if(un && curSettings && un !== curSettings.username) body.username = un;
   body.base_path = $('#setPath').value.trim();
   const port = parseInt($('#setPort').value.trim(), 10);
   if(port) body.port = port;

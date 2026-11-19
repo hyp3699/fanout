@@ -105,7 +105,7 @@ func handleNginxProxy(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		name = strings.TrimPrefix(strings.TrimSpace(spec.Domain), "www.")
 	}
-	name = strings.NewReplacer(".", "-", " ", "-").Replace(name)
+	name = strings.NewReplacer(".", "-", " ", "-", ":", "-", "*", "wildcard").Replace(name)
 	if !strings.HasSuffix(name, ".conf") {
 		name += ".conf"
 	}
@@ -203,7 +203,13 @@ func handleCertIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer certIssueMu.Unlock()
-	item, logs, err := issueCert(spec)
+	var item *certItem
+	var logs string
+	err := withCFOnce(spec.cfOnce, func() error {
+		var e error
+		item, logs, e = issueCert(spec)
+		return e
+	})
 	recordOp("申请证书", spec.Zone+"/"+spec.Mode, err)
 	if err != nil {
 		c.fail(http.StatusOK, "%s\n%s", safeErrText(err.Error()), logs)
@@ -234,6 +240,39 @@ func handleCertDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---- Cloudflare ----
+
+// handleCFZonesOnce 用一次性凭证列出域名（填表用），凭证不保存。
+func handleCFZonesOnce(w http.ResponseWriter, r *http.Request) {
+	c := newAPICtx(w, r)
+	if !c.needMethod(http.MethodPost) {
+		return
+	}
+	var body cfOnce
+	if !c.decode(&body) {
+		return
+	}
+	if cr, err := body.creds(); err != nil || cr == nil {
+		if err == nil {
+			err = fmt.Errorf("先填 Token 或 邮箱 + Global API Key")
+		}
+		c.fail(http.StatusOK, "%s", err.Error())
+		return
+	}
+	var zones any
+	err := withCFOnce(body, func() error {
+		if e := cfVerify(); e != nil {
+			return e
+		}
+		z, e := cfZones()
+		zones = z
+		return e
+	})
+	if err != nil {
+		c.fail(http.StatusOK, "凭证不可用：%s", err.Error())
+		return
+	}
+	c.ok(map[string]any{"zones": zones})
+}
 
 func handleCFStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {

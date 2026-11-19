@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -34,8 +35,100 @@ type cfCreds struct {
 	Key   string `json:"-"`
 }
 
-// loadCFCreds 读出当前凭证；没有时返回 nil。
+// ---- 一次性凭证：开 CDN / 开隧道 / 申请证书时可以直接填 Token 或 Global Key，
+// 只在这一次操作里用，不落盘，用完清掉（acme.sh 自己存的 SAVED_CF_* 也一并删）。
+
+var (
+	cfTempMu sync.Mutex   // 同一时间只跑一个一次性凭证操作
+	cfTempRW sync.RWMutex // 保护 cfTemp
+	cfTemp   *cfCreds
+)
+
+// cfOnce 是请求里带的一次性凭证字段，嵌进各接口的请求体。
+type cfOnce struct {
+	CFToken string `json:"cf_token"`
+	CFEmail string `json:"cf_email"`
+	CFKey   string `json:"cf_key"`
+}
+
+// creds 把请求里的字段变成凭证；都没填返回 nil（用已保存的）。
+func (o cfOnce) creds() (*cfCreds, error) {
+	tok := strings.TrimSpace(o.CFToken)
+	email := strings.TrimSpace(o.CFEmail)
+	key := strings.TrimSpace(o.CFKey)
+	switch {
+	case tok != "":
+		if len(tok) < 20 {
+			return nil, fmt.Errorf("Token 太短，看着不像 Cloudflare API Token")
+		}
+		return &cfCreds{Kind: "token", Token: tok}, nil
+	case email != "" || key != "":
+		if !strings.Contains(email, "@") || len(key) < 20 {
+			return nil, fmt.Errorf("邮箱或 Global API Key 格式不对")
+		}
+		return &cfCreds{Kind: "global", Email: email, Key: key}, nil
+	}
+	return nil, nil
+}
+
+// withCFOnce 在 fn 执行期间临时使用 o 里的凭证（没填就直接用已保存的），结束后清掉。
+func withCFOnce(o cfOnce, fn func() error) error {
+	c, err := o.creds()
+	if err != nil {
+		return err
+	}
+	if c == nil {
+		return fn()
+	}
+	cfTempMu.Lock()
+	defer cfTempMu.Unlock()
+	cfTempRW.Lock()
+	cfTemp = c
+	cfTempRW.Unlock()
+	defer func() {
+		cfTempRW.Lock()
+		cfTemp = nil
+		cfTempRW.Unlock()
+		scrubAcmeSavedCF()
+	}()
+	return fn()
+}
+
+// scrubAcmeSavedCF 删掉 acme.sh 在 account.conf 里自动保存的 Cloudflare 凭证。
+// 用一次性凭证申请的证书因此不能自动续期，到期前再申请一次即可。
+func scrubAcmeSavedCF() {
+	lp := panelPaths()
+	if lp.AcmeSh == "" {
+		return
+	}
+	conf := filepath.Join(filepath.Dir(lp.AcmeSh), "account.conf")
+	blob, err := os.ReadFile(conf)
+	if err != nil {
+		return
+	}
+	var keep []string
+	changed := false
+	for _, line := range strings.Split(string(blob), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "SAVED_CF_") {
+			changed = true
+			continue
+		}
+		keep = append(keep, line)
+	}
+	if changed {
+		_ = writeFileAtomic(conf, []byte(strings.Join(keep, "\n")), 0600)
+	}
+}
+
+// loadCFCreds 读出当前凭证（一次性凭证优先）；没有时返回 nil。
 func loadCFCreds() *cfCreds {
+	cfTempRW.RLock()
+	t := cfTemp
+	cfTempRW.RUnlock()
+	if t != nil {
+		cp := *t
+		return &cp
+	}
 	lp := panelPaths()
 	if blob, err := os.ReadFile(lp.CFTokenFile); err == nil {
 		if tok := strings.TrimSpace(string(blob)); tok != "" {

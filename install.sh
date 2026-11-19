@@ -334,7 +334,7 @@ svc_is_active && echo "      服务运行中（${INIT_SYS}）" || {
 
 # 口令与访问路径由 fanout 首次启动时生成，等它写出来
 for _ in $(seq 1 10); do
-  [[ -s "${WORK_DIR}/password" && -s "${WORK_DIR}/basepath" ]] && break
+  [[ -s "${WORK_DIR}/password" && -s "${WORK_DIR}/basepath" && -s "${WORK_DIR}/username" ]] && break
   sleep 1
 done
 
@@ -346,6 +346,7 @@ ACTUAL_PORT=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' \
 [[ -n $ACTUAL_PORT ]] && WEB_PORT="$ACTUAL_PORT"
 echo
 echo "  管理界面  http://${IP}:${WEB_PORT}/${BP}/"
+echo "  用户名    $(cat "${WORK_DIR}/username" 2>/dev/null || echo admin)"
 echo "  访问口令  $(cat "${WORK_DIR}/password" 2>/dev/null || echo "见 ${WORK_DIR}/password")"
 echo
 echo "  路径和口令都是随机生成的，也可以随时查看："

@@ -210,6 +210,8 @@ func registerCoreRoutes(mux *http.ServeMux, mgr *Manager) {
 func registerSettingsRoutes(mux *http.ServeMux, auth *Auth, srv *webServer) {
 	// 设置面板：改密码 / 改路径 / 改端口 / 改本地监听。
 	mux.HandleFunc("/api/settings", apiSettings(auth, srv))
+	mux.HandleFunc("/api/settings/totp", apiTOTP(auth))
+	mux.HandleFunc("/api/settings/sessions", apiSessions(auth))
 	mux.HandleFunc("/api/update/check", apiUpdateCheck)
 	mux.HandleFunc("/api/update/apply", apiUpdateApply)
 }
@@ -374,6 +376,7 @@ func apiCred(m *Manager) http.HandlerFunc {
 // GET 返回当前值（不含明文口令）；POST 按传入的字段逐项应用，任一项失败即整体回报。
 func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 	type settingsReq struct {
+		Username        *string `json:"username"`         // 非空则改用户名
 		Password        *string `json:"password"`         // 非空则改口令
 		BasePath        *string `json:"base_path"`        // 提供即改访问路径（空串=去掉前缀）
 		Port            *int    `json:"port"`             // 提供即改监听端口
@@ -388,12 +391,25 @@ func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 				return
 			}
 
-			// 改口令
+			// 改用户名 / 口令：改完踢掉其他浏览器的会话，只留当前这个
+			credChanged := false
+			if in.Username != nil && strings.TrimSpace(*in.Username) != "" && strings.TrimSpace(*in.Username) != auth.Username() {
+				if err := auth.SetUsername(*in.Username); err != nil {
+					writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+					return
+				}
+				credChanged = true
+			}
 			if in.Password != nil && *in.Password != "" {
 				if err := auth.SetPassword(*in.Password); err != nil {
 					writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 					return
 				}
+				credChanged = true
+			}
+			if credChanged {
+				auth.RevokeOthers(sessionFrom(r))
+				recordOp("修改面板账号", auth.Username(), nil)
 			}
 			// 改访问路径
 			if in.BasePath != nil {
@@ -436,9 +452,67 @@ func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 			"port":             cfg.Port,
 			"listen_addr":      listen,
 			"has_password":     true,
+			"username":         auth.Username(),
+			"totp":             auth.TOTPEnabled(),
+			"sessions":         auth.SessionCount(),
 			"residential_only": cfg.residentialOnly(),
 			"version":          version,
 		})
+	}
+}
+
+// apiTOTP 两步验证：begin 生成密钥 → confirm 用验证码确认生效；disable 需要当前验证码。
+func apiTOTP(auth *Auth) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusOK, map[string]any{"enabled": auth.TOTPEnabled()})
+			return
+		}
+		var in struct {
+			Action string `json:"action"`
+			Code   string `json:"code"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求格式错误"})
+			return
+		}
+		switch in.Action {
+		case "begin":
+			secret, uri, err := auth.TOTPBegin("fanout")
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"secret": secret, "uri": uri})
+		case "confirm":
+			if err := auth.TOTPConfirm(in.Code); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+			auth.RevokeOthers(sessionFrom(r))
+			recordOp("开启两步验证", auth.Username(), nil)
+			writeJSON(w, http.StatusOK, map[string]any{"enabled": true})
+		case "disable":
+			if err := auth.TOTPDisable(in.Code); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+			recordOp("关闭两步验证", auth.Username(), nil)
+			writeJSON(w, http.StatusOK, map[string]any{"enabled": false})
+		default:
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "未知操作"})
+		}
+	}
+}
+
+// apiSessions POST 踢掉除当前浏览器以外的所有登录。
+func apiSessions(auth *Auth) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			auth.RevokeOthers(sessionFrom(r))
+			recordOp("踢下线其他会话", auth.Username(), nil)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"sessions": auth.SessionCount()})
 	}
 }
 

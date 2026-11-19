@@ -10,7 +10,53 @@ async function postJSON(path, body){
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(body || {})
   });
+  if(r.status === 401){ location.reload(); return {error: '登录已过期'}; }
   return await r.json().catch(() => ({}));
+}
+
+// 一次性 Cloudflare 凭证：从 prefix 开头的几个输入框读出来，随请求发出去，后端用完即删、不保存。
+function cfOnceBody(prefix){
+  const v = id => { const el = document.getElementById(prefix + id); return el ? el.value.trim() : ''; };
+  const out = {};
+  if(v('Tok')) out.cf_token = v('Tok');
+  if(v('Mail') || v('Key')){ out.cf_email = v('Mail'); out.cf_key = v('Key'); }
+  return out;
+}
+function cfOnceHTML(prefix){
+  return '<details class="cfonce" id="' + prefix + 'Once"><summary>临时使用 Cloudflare 凭证（用完即删，不保存）</summary>'
+    + '<label class="field"><span>API Token</span><input id="' + prefix + 'Tok" type="password" autocomplete="off" spellcheck="false" placeholder="留空则用已保存的凭证"></label>'
+    + '<div class="row2"><label class="field"><span>或：登录邮箱</span><input id="' + prefix + 'Mail" type="text" autocomplete="off" spellcheck="false"></label>'
+    + '<label class="field"><span>Global API Key</span><input id="' + prefix + 'Key" type="password" autocomplete="off" spellcheck="false"></label></div>'
+    + '<button type="button" id="' + prefix + 'Load">用这个凭证读取域名</button></details>';
+}
+// 用一次性凭证读域名，填进给定的下拉框
+async function cfOnceLoadZones(prefix, selects){
+  const body = cfOnceBody(prefix);
+  if(!body.cf_token && !body.cf_email) return toast('先填 Token 或 邮箱 + Global Key', true);
+  const d = await postJSON('/api/cf/zones', body);
+  if(d.error) return toast(d.error, true);
+  const opts = (d.zones || []).map(z => '<option>' + esc(z.name || z) + '</option>').join('')
+    || '<option value="">这个凭证下没有域名</option>';
+  selects.forEach(sel => { const el = $(sel); if(el) el.innerHTML = opts; });
+  toast('已读取 ' + (d.zones || []).length + ' 个域名');
+}
+function clearCFOnce(prefix){
+  ['Tok', 'Mail', 'Key'].forEach(k => { const el = document.getElementById(prefix + k); if(el) el.value = ''; });
+}
+
+// 用户限速 / 流量摘要（数据来自 app.js 的 users）
+function userLimitOf(name){
+  const list = (typeof users !== 'undefined' && users && users.users) || [];
+  return list.find(x => x.name === name);
+}
+function userLimitText(name){
+  const u = userLimitOf(name);
+  if(!u) return '';
+  const sp = u.speed ? ('限速 ' + u.speed.text) : '不限速';
+  const tr = u.traffic && u.traffic.enabled
+    ? ('流量 ' + fmtBytes(u.period_total) + ' / ' + fmtBytes(u.traffic.limit_bytes))
+    : ('已用 ' + fmtBytes(u.total) + ' · 不限量');
+  return sp + ' · ' + tr + (u.traffic && u.traffic.disabled_by_limit ? ' · 已到量停用' : '');
 }
 
 function tag(cls, text){ return '<span class="badge ' + cls + '">' + esc(text) + '</span>'; }
@@ -98,7 +144,7 @@ function nodeBadges(n){
   if(need === 'both') out.push((okT && okU) ? tag('ok', 'TCP/UDP 已放行') : tag('bad', '端口未放行'));
   else if(need === 'udp') out.push(okU ? tag('ok', 'UDP 已放行') : tag('bad', 'UDP 未放行'));
   else out.push(okT ? tag('ok', 'TCP 已放行') : tag('bad', '端口未放行'));
-  if(n.quick) out.push(tag(n.quick_on ? 'acc' : '', '临时隧道' + (n.quick_on ? ' 🟢' : '')));
+  if(n.quick) out.push(tag(n.quick_on ? 'ok' : '', n.quick_on ? '隧道运行中' : '隧道已停止'));
   if((n.cdn_domains || []).length) out.push(tag('acc', 'CDN'));
   if(n.hop_on) out.push(tag('acc', '端口跳跃'));
   if(n.obfs_on) out.push(tag('acc', 'Gecko 混淆'));
@@ -109,14 +155,23 @@ function nodeBadges(n){
 
 function renderNodes(){
   const box = $('#nodes');
-  const list = nodesState.nodes || [];
+  const all = nodesState.nodes || [];
+  // CF 临时隧道是专用入站，单独一栏，不和普通节点混在一起
+  const list = all.filter(n => !n.quick);
+  const quick = all.filter(n => n.quick);
   $('#ncount').textContent = list.length + ' 个';
+  $('#qcount').textContent = quick.length + ' 个';
+  $('#quicknodes').innerHTML = quick.map(nodeCardHTML).join('')
+    || '<div class="empty small">还没有临时隧道。</div>';
   if(!list.length){
-    box.innerHTML = '<div class="empty small">还没有入站。点右上角「添加入站」建一个，'
-      + '或先在 sing-box-08.sh 里添加，这里会自动读出来。</div>';
+    box.innerHTML = '<div class="empty small">还没有入站。点右上角「添加入站」建一个。</div>';
     return;
   }
-  box.innerHTML = list.map(n => {
+  box.innerHTML = list.map(nodeCardHTML).join('');
+}
+
+function nodeCardHTML(n){
+  {
     const users = (n.users || []).length;
     const quick = n.quick ? (' · 隧道域名 ' + (n.quick_domain || '未分配')) : '';
     return '<div class="card" data-file="' + esc(n.file) + '">'
@@ -132,7 +187,7 @@ function renderNodes(){
       + '<span class="spacer"></span>'
       + '<button class="danger" data-nact="delete">删除</button>'
       + '</div></div>';
-  }).join('');
+  }
 }
 
 document.addEventListener('click', async e => {
@@ -194,6 +249,9 @@ async function ensureZones(){
 
 async function openNodeSheet(file){
   await ensureZones();
+  if(typeof users !== 'undefined' && !(users && (users.users || []).length)){
+    try{ users = await api('/api/users'); }catch(e){}
+  }
   const d = await api('/api/nodes/detail?file=' + encodeURIComponent(file));
   if(d.error) return toast(d.error, true);
   nodeCur = d.node;
@@ -217,16 +275,20 @@ function switchButtons(kind){
 function nodeSheetHTML(n, config){
   const users = (n.users || []).map((u, i) => {
     const cred = u.uuid || u.username || u.password || '';
+    const lim = u.name ? userLimitText(u.name) : '';
     return '<div class="drow"><span class="grow"><b>' + esc(u.name || ('用户' + (i + 1))) + '</b>'
-      + '<div class="dim mono">' + esc(cred) + '</div></span>'
+      + '<div class="dim mono">' + esc(cred) + '</div>'
+      + (lim ? '<div class="ulim">' + esc(lim) + '</div>' : '') + '</span>'
+      + (u.name ? '<button data-ulimit="' + esc(u.name) + '">限速/流量</button>' : '')
       + '<button data-cred="' + esc(u.name) + '">换 UUID</button></div>';
   }).join('');
   const tcp = n.port_ok && n.port_ok.tcp, udp = n.port_ok && n.port_ok.udp;
   const isReality = n.reality;
   const isHy2 = n.kind === 'hysteria2';
-  const canCDN = ['vless-ws', 'vmess-ws', 'trojan-ws', 'vless-xhttp', 'xhttp-udp-tls'].includes(n.kind);
+  // 临时隧道专用入站只显示隧道相关；普通节点不出现临时隧道
+  const canCDN = !n.quick && ['vless-ws', 'vmess-ws', 'trojan-ws', 'vless-xhttp', 'xhttp-udp-tls'].includes(n.kind);
   const canTunnel = canCDN;
-  const canQuick = ['vless-ws', 'vmess-ws', 'trojan-ws', 'vless-xhttp'].includes(n.kind);
+  const canQuick = !!n.quick;
   const cdn = (n.cdn_domains || []).map(d =>
     '<div class="drow"><span class="grow">' + esc(d) + '</span>'
     + '<button class="danger" data-delcdn="' + esc(d) + '">删除</button></div>').join('');
@@ -242,13 +304,14 @@ function nodeSheetHTML(n, config){
     + '<div class="kvitem"><b>' + esc(n.file) + '</b><span>配置文件</span></div>'
     + '</div></div>'
 
-    + '<div class="sec"><h3>凭据<button data-credall="1" style="margin-left:auto">全部换新</button></h3>'
+    + '<div class="sec"><h3>用户<button data-credall="1" style="margin-left:auto">全部换新</button></h3>'
     + (users || '<div class="hintline">这个入站还没有用户</div>') + '</div>'
 
-    + '<div class="sec"><h3>修改端口</h3>'
+    + (n.quick ? '' : ('<div class="sec"><h3>修改端口</h3>'
     + '<div class="rowbtn"><input id="nPort" type="text" inputmode="numeric" value="' + n.port + '" style="flex:1;min-width:110px">'
-    + '<button class="primary" id="nPortSave">保存</button></div>'
-    + '<div class="hintline">旧端口的放行规则会被清掉，新端口自动放行；链接与订阅跟着改。</div></div>'
+    + '<button class="primary" id="nPortSave">保存</button></div></div>'))
+
+    + ((canCDN || canTunnel) ? '<div class="sec"><h3>Cloudflare 凭证</h3>' + cfOnceHTML('nCF') + '</div>' : '')
 
     + (isReality ? ('<div class="sec"><h3>Reality 伪装域名</h3>'
       + '<div class="rowbtn"><select id="nSNI" style="flex:1;min-width:150px">'
@@ -273,14 +336,12 @@ function nodeSheetHTML(n, config){
       + (cdn || '<div class="hintline">还没有开 CDN</div>')
       + '<div class="row2" style="margin-top:9px"><label class="field"><span>Cloudflare 域名</span><select id="nCDNZone"><option value="">加载中…</option></select></label>'
       + '<label class="field"><span>前缀（留空用根域名）</span><input id="nCDNPrefix" type="text" placeholder="cdn"></label></div>'
-      + '<div class="rowbtn"><button class="primary" id="nCDNOn">开启 CDN</button></div>'
-      + '<div class="hintline">会写 DNS（橙云）、SSL 模式与回源端口规则，然后往链接里加一条 _cdn 节点。</div></div>') : '')
+      + '<div class="rowbtn"><button class="primary" id="nCDNOn">开启 CDN</button></div></div>') : '')
 
     + (canTunnel ? ('<div class="sec"><h3>固定隧道（Cloudflare Tunnel）</h3>'
       + '<div class="row2"><label class="field"><span>域名</span><select id="nTunZone"><option value="">加载中…</option></select></label>'
       + '<label class="field"><span>前缀（留空用根域名）</span><input id="nTunPrefix" type="text" placeholder="node"></label></div>'
-      + '<div class="rowbtn"><button class="primary" id="nTunOn">开启隧道</button></div>'
-      + '<div class="hintline">用本机的 Cloudflare Tunnel（没有会自动建），把 域名+路径 指到 127.0.0.1:' + n.port + '。</div></div>') : '')
+      + '<div class="rowbtn"><button class="primary" id="nTunOn">开启隧道</button></div></div>') : '')
 
     + (canQuick ? ('<div class="sec"><h3>临时隧道' + (n.quick_on ? tag('acc', '运行中') : tag('', '未运行')) + '</h3>'
       + '<div class="hintline mono">' + esc(n.quick_domain || '还没有分配域名') + '</div>'
@@ -289,8 +350,7 @@ function nodeSheetHTML(n, config){
       + (n.quick_on ? '<button class="danger" id="nQuickStop">停止</button>' : '')
       + '<button id="nQuickCreds">重置 UUID/路径</button>'
       + switchButtons(n.kind)
-      + '</div>'
-      + '<div class="hintline">trycloudflare 域名每次重启都会变，链接与用户订阅会自动更新。</div></div>') : '')
+      + '</div></div>') : '')
 
     + '<div class="sec"><h3>链接</h3><div class="linkbox" id="nLinks">'
     + ((n.links || []).map(l => esc(l)).join('\n') || '（还没有链接文件）') + '</div>'
@@ -359,15 +419,20 @@ function bindNodeSheet(n){
     b.onclick = () => {
       const dom = b.dataset.delcdn;
       if(!confirmBox('删掉 CDN ' + dom + '？会同时删 Cloudflare 的回源规则和 DNS。')) return;
-      run('/api/nodes/cdn', {file, action: 'disable', domain: dom}, 'CDN 已删除');
+      run('/api/nodes/cdn', Object.assign({file, action: 'disable', domain: dom}, cfOnceBody('nCF')), 'CDN 已删除');
     };
+  });
+  if($('#nCFLoad')) $('#nCFLoad').onclick = () => cfOnceLoadZones('nCF', ['#nCDNZone', '#nTunZone']);
+  document.querySelectorAll('#nodebody [data-ulimit]').forEach(b => {
+    b.onclick = e => { e.stopPropagation(); openUser(b.dataset.ulimit, () => openNodeSheet(file)); };
   });
   if($('#nCDNOn')){
     fillZoneSelect('#nCDNZone');
     $('#nCDNOn').onclick = async () => {
       const zone = $('#nCDNZone').value;
       if(!zone) return toast('先选 Cloudflare 域名', true);
-      const d = await postJSON('/api/nodes/cdn', {file, action: 'enable', zone, prefix: $('#nCDNPrefix').value.trim()});
+      const d = await postJSON('/api/nodes/cdn', Object.assign({file, action: 'enable', zone, prefix: $('#nCDNPrefix').value.trim()}, cfOnceBody('nCF')));
+      clearCFOnce('nCF');
       if(d.error) return toast(d.error, true);
       toast('CDN 已开：' + (d.domain || ''));
       if(d.warning) setTimeout(() => toast(d.warning, true), 1200);
@@ -379,7 +444,8 @@ function bindNodeSheet(n){
     $('#nTunOn').onclick = async () => {
       const zone = $('#nTunZone').value;
       if(!zone) return toast('先选 Cloudflare 域名', true);
-      const d = await postJSON('/api/nodes/tunnel', {file, zone, prefix: $('#nTunPrefix').value.trim()});
+      const d = await postJSON('/api/nodes/tunnel', Object.assign({file, zone, prefix: $('#nTunPrefix').value.trim()}, cfOnceBody('nCF')));
+      clearCFOnce('nCF');
       if(d.error) return toast(d.error, true);
       toast('隧道已开：' + (d.domain || ''));
       openNodeSheet(file); loadNodes(true);
@@ -411,7 +477,7 @@ function bindNodeSheet(n){
       const target = b.dataset.qswitch;
       if(!confirmBox('把临时隧道切到 ' + target + '？\n会换一个配置文件（编号 +1），端口、路径和用户不变。'
         + '\n（CF 临时隧道只支持 WebSocket，XHTTP 会不通）')) return;
-      quickSwitch(file, target);
+      quickSwitch(target);
     };
   });
   $('#nCopyLinks').onclick = () => copy($('#nLinks').textContent);
@@ -430,7 +496,7 @@ function bindNodeSheet(n){
 // ---- 添加入站 ----
 
 function openNodeCreate(){
-  const kinds = nodesState.kinds || [];
+  const kinds = (nodesState.kinds || []).filter(k => k.kind !== 'cf-quick');
   $('#ncKind').innerHTML = kinds.map(k => '<option value="' + k.kind + '">' + esc(k.label) + ' · ' + esc(k.note) + '</option>').join('');
   $('#ncSNI').innerHTML = (nodesState.reality_sites || []).map(s => '<option>' + esc(s) + '</option>').join('');
   $('#ncSNI').value = (nodesState.reality_sites || []).slice(-1)[0] || 'www.iij.ad.jp';
@@ -488,8 +554,7 @@ function renderSubs(){
   const list = subsState.subs || [];
   $('#scount').textContent = list.length + ' 个';
   if(!list.length){
-    box.innerHTML = '<div class="empty small">还没有订阅用户。一个用户可以同时挂在多个入站上，'
-      + '这里会给他生成订阅地址和限速/流量限制。</div>';
+    box.innerHTML = '<div class="empty small">还没有订阅用户。</div>';
     return;
   }
   box.innerHTML = list.map(s => {
@@ -503,7 +568,9 @@ function renderSubs(){
       + '<div class="sub">' + esc(traf) + ' · ' + (s.links || []).length + ' 条节点</div>'
       + '<div class="top" style="margin-top:6px;gap:5px">' + (chips || tag('bad', '没有挂任何入站')) + '</div>'
       + '<div class="sub mono">' + esc(s.sub_url || '（订阅地址未生成）') + '</div>'
+      + (userLimitText(s.name) ? '<div class="ulim">' + esc(userLimitText(s.name)) + '</div>' : '')
       + '<div class="acts"><button data-sact="copy">复制订阅</button>'
+      + '<button data-ulimit="' + esc(s.name) + '">限速/流量</button>'
       + '<button data-sact="links">看节点</button>'
       + '<button data-sact="rebuild">重建</button>'
       + '<span class="spacer"></span>'
@@ -590,9 +657,8 @@ function renderNginx(){
   if(st.version) badges.push(tag('', st.version));
   box.innerHTML = '<div class="card"><div class="top"><span class="name">Nginx</span>'
     + badges.join('') + '</div>'
-    + '<div class="sub">' + (infraState.sub_domain
-      ? ('订阅主站 ' + esc(infraState.sub_domain) + (infraState.sub_port ? ':' + esc(infraState.sub_port) : ''))
-      : '还没有订阅主站（singbox_sub.conf）') + ' · ' + (st.conf_count || 0) + ' 个站点配置</div>'
+    + (infraState.sub_domain
+      ? ('<div class="sub">订阅主站 ' + esc(infraState.sub_domain) + (infraState.sub_port ? ':' + esc(infraState.sub_port) : '') + '</div>') : '')
     + (st.test_err ? '<div class="errline">' + esc(st.test_err) + '</div>' : '')
     + '</div>';
 
@@ -602,7 +668,7 @@ function renderNginx(){
     const listen = (s.listen || []).join(' ');
     const names = (s.server_names || []).join(' ');
     const target = (s.proxy_pass || [])[0] || '';
-    return '<div class="card" data-site="' + esc(s.name) + '" data-user="' + (s.user_site ? '1' : '0') + '">'
+    return '<div class="card" data-site="' + esc(s.name) + '" data-usersite="' + (s.user_site ? '1' : '0') + '">'
       + '<div class="top"><span class="name">' + esc(s.name) + '</span>'
       + (s.protected ? tag('warn', '脚本维护') : '')
       + (s.user_site ? tag('', '订阅片段') : '')
@@ -652,13 +718,13 @@ document.addEventListener('click', async e => {
   if(!btn) return;
   if(btn.dataset.gact === 'edit'){
     const card = btn.closest('[data-site]');
-    return openSiteEditor(card.dataset.site, card.dataset.user === '1');
+    return openSiteEditor(card.dataset.site, card.dataset.usersite === '1');
   }
   if(btn.dataset.gact === 'del'){
     const card = btn.closest('[data-site]');
     const name = card.dataset.site;
     if(!confirmBox('删除 ' + name + '？文件会挪进回收目录，nginx -t 不过会自动还原。')) return;
-    const d = await postJSON('/api/nginx/delete', {name, user_site: card.dataset.user === '1'});
+    const d = await postJSON('/api/nginx/delete', {name, user_site: card.dataset.usersite === '1'});
     if(d.error) return toast(d.error, true);
     toast('已删除'); loadInfra();
     return;
@@ -706,22 +772,39 @@ async function submitSite(){
   loadInfra();
 }
 
-function openProxySheet(){
-  $('#pxDomain').value = '';
+async function openProxySheet(){
+  // 域名 / IP 直接从已有证书里选，不用手输
+  if(!(infraState.certs || []).length){
+    try{ const c = await api('/api/certs'); infraState.certs = c.certs || []; }catch(e){}
+  }
+  const names = [];
+  (infraState.certs || []).forEach(c => { if(c.domain && !names.includes(c.domain)) names.push(c.domain); });
+  const ip = nodesState.public_ip || '';
+  let opts = names.map(d => '<option value="' + esc(d) + '">' + esc(d) + '</option>').join('');
+  if(ip && !names.includes(ip)) opts += '<option value="' + esc(ip) + '" data-nocert="1">' + esc(ip) + '（本机 IP，没有证书只能 HTTP）</option>';
+  $('#pxDomain').innerHTML = opts || '<option value="">（还没有证书，先在下面「证书」里申请）</option>';
+  $('#pxDomain').onchange = () => {
+    const o = $('#pxDomain').selectedOptions[0];
+    const nocert = o && o.dataset.nocert === '1';
+    $('#pxTLS').checked = !nocert;
+    $('#pxTLS').disabled = nocert;
+    if(nocert && $('#pxPort').value === '443') $('#pxPort').value = '80';
+  };
   $('#pxPort').value = '443';
   $('#pxTarget').value = '127.0.0.1:9393';
   $('#pxTLS').checked = true;
   $('#pxWS').checked = false;
   $('#pxName').value = '';
   $('#pxExtra').value = '';
-  fillCertSelect('#pxCertHint');
+  $('#pxTLS').disabled = false;
+  $('#pxDomain').onchange();
   openModal('pxnew');
 }
 
 async function submitProxy(){
   const d = await postJSON('/api/nginx/proxy', {
     name: $('#pxName').value.trim(),
-    domain: $('#pxDomain').value.trim(),
+    domain: $('#pxDomain').value,
     listen_port: Number($('#pxPort').value),
     target: $('#pxTarget').value.trim(),
     tls: $('#pxTLS').checked,
@@ -735,6 +818,7 @@ async function submitProxy(){
 }
 
 function openCertIssue(){
+  clearCFOnce('ci');
   fillZoneSelect('#ciZone');
   $('#ciMode').value = 'sub';
   $('#ciPrefix').value = '';
@@ -748,12 +832,13 @@ async function submitCertIssue(){
   btn.disabled = true;
   const old = btn.textContent;
   btn.textContent = '申请中…（可能要 1-2 分钟）';
-  const d = await postJSON('/api/certs/issue', {
+  const d = await postJSON('/api/certs/issue', Object.assign({
     zone: $('#ciZone').value,
     mode: $('#ciMode').value,
     prefix: $('#ciPrefix').value.trim(),
     wildcard: $('#ciWild').checked
-  });
+  }, cfOnceBody('ci')));
+  clearCFOnce('ci');
   btn.disabled = false;
   btn.textContent = old;
   if(d.error){
@@ -848,7 +933,7 @@ function renderSystem(){
   $('#fwcount').textContent = (fw.inbounds || []).length + ' 个入站';
   $('#firewall').innerHTML = '<div class="card"><div class="top"><span class="name">入站端口放行</span>'
     + (fw.available ? (fw.policy === 'drop' ? tag('warn', '防火墙已开启') : tag('ok', '防火墙未拦截')) : tag('bad', '没有 nft'))
-    + '</div><div class="sub">与脚本的 nftables script_input 链是同一份规则。</div>'
+    + '</div>'
     + '<div class="dlist" style="margin-top:9px">'
     + ((fw.inbounds || []).map(p => {
       const ok = (p.need || []).every(x => x === 'tcp' ? p.tcp : p.udp);
@@ -857,10 +942,6 @@ function renderSystem(){
     }).join('') || '<div class="hintline">还没有入站</div>')
     + '</div></div>';
 
-  $('#outbounds').innerHTML = (sysState.outbounds || []).map(b =>
-    '<div class="drow"><span class="grow mono">' + esc(b.tag) + '</span>'
-    + tag(b.tag === 'wireguard-out' ? 'acc' : '', b.type) + (b.note ? tag('warn', b.note) : '') + '</div>'
-  ).join('') || '<div class="hintline">配置目录里没有别的出站</div>';
 
   renderOplog(sysState.ops);
 }
@@ -924,6 +1005,17 @@ function initAdmin(){
   loadNodes(true);
 
   $('#nodeNew').onclick = openNodeCreate;
+  $('#quickNew').onclick = async () => {
+    if(!confirmBox('新建一个 CF 临时隧道？\n会建 127.0.0.1 上的 VMess WS 入站并立刻开 trycloudflare 隧道，域名每次重启都会变。')) return;
+    const btn = $('#quickNew');
+    btn.disabled = true;
+    const d = await postJSON('/api/nodes/create', {kind: 'cf-quick', quick: true});
+    btn.disabled = false;
+    if(d.error) return toast(d.error, true);
+    toast('临时隧道已建好');
+    loadNodes();
+  };
+  $('#ciLoad').onclick = () => cfOnceLoadZones('ci', ['#ciZone']);
   $('#nodeRefresh').onclick = () => loadNodes();
   $('#ncKind').onchange = updateKindFields;
   $('#ncCancel').onclick = () => closeModal('nodecreate');

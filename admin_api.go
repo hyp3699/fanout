@@ -156,6 +156,7 @@ func registerAdminAPI(mux *http.ServeMux) {
 	mux.HandleFunc("/api/certs/delete", handleCertDelete)
 	mux.HandleFunc("/api/cf", handleCFStatus)
 	mux.HandleFunc("/api/cf/cred", handleCFCred)
+	mux.HandleFunc("/api/cf/zones", handleCFZonesOnce)
 	// 系统
 	mux.HandleFunc("/api/system", handleSystem)
 	mux.HandleFunc("/api/system/service", handleSystemService)

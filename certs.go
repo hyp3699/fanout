@@ -281,6 +281,7 @@ type certIssueSpec struct {
 	Mode     string `json:"mode"`     // root / sub / wildcard / origin_ca
 	Prefix   string `json:"prefix"`   // sub 模式的前缀
 	Wildcard bool   `json:"wildcard"` // Origin CA 也可以带通配
+	cfOnce
 }
 
 // certDomainFor 算出要签发的域名。

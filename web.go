@@ -54,6 +54,9 @@ const indexTemplate = `<!DOCTYPE html>
   <h1>fanout</h1>
   <span class="count" id="panel"></span>
   <span class="spacer"></span>
+  <button class="icon" id="logoutBtn" title="退出登录">
+    <svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>
+  </button>
   <button class="icon" id="settingsBtn" title="设置">
     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
   </button>
@@ -101,8 +104,15 @@ const indexTemplate = `<!DOCTYPE html>
       <button id="nodeRefresh">刷新</button>
       <button class="primary" id="nodeNew">添加入站</button>
     </div>
-    <div class="barhint">与 sing-box-08.sh 同一套配置：网页里改完，脚本菜单里直接能看到，反过来也一样。</div>
     <div id="nodes"></div>
+
+    <div class="bar" style="margin-top:22px">
+      <h2>CF 临时隧道</h2>
+      <span class="count" id="qcount"></span>
+      <span class="spacer"></span>
+      <button class="primary" id="quickNew">新建临时隧道</button>
+    </div>
+    <div id="quicknodes"></div>
   </section>
 
   <section class="pane" id="pane-subs">
@@ -112,15 +122,10 @@ const indexTemplate = `<!DOCTYPE html>
       <span class="spacer"></span>
       <button class="primary" id="subNew">添加用户</button>
     </div>
-    <div class="barhint">一个用户可以同时挂在多个入站上；订阅地址由 Nginx 的 singbox_sub.conf 提供。</div>
     <div id="subs"></div>
 
-    <div class="bar" style="margin-top:22px">
-      <h2>限速与流量限制</h2>
-      <span class="count" id="ucount"></span>
-    </div>
-    <div class="barhint">按入站里的用户名设置，与 sing-box-08.sh 共用同一份数据。限速用户的分流规则照常生效。</div>
-    <div id="users"></div>
+    <span id="ucount" hidden></span>
+    <div id="users" hidden></div>
   </section>
 
   <section class="pane" id="pane-rules">
@@ -155,7 +160,6 @@ const indexTemplate = `<!DOCTYPE html>
       <span class="spacer"></span>
       <button class="primary" id="certNew">申请证书</button>
     </div>
-    <div class="barhint">证书放 /root/cert/&lt;域名&gt;/，与脚本共用；申请走 Cloudflare DNS，不占 80 端口。</div>
     <div id="certs"></div>
 
     <div class="bar" style="margin-top:22px">
@@ -184,9 +188,6 @@ const indexTemplate = `<!DOCTYPE html>
     </div>
     <div id="firewall"></div>
 
-    <div class="bar" style="margin-top:22px"><h2>可选出口</h2></div>
-    <div class="barhint">分流规则可以把流量送到这些已有出站；WARP（wireguard-out）排在前面。</div>
-    <div id="outbounds"></div>
 
     <div class="bar" style="margin-top:22px">
       <h2>操作日志</h2>
@@ -407,9 +408,31 @@ const indexTemplate = `<!DOCTYPE html>
       </button>
     </div>
     <div class="body">
-      <label class="f"><span>访问口令</span>
+      <label class="f"><span>登录用户名</span>
+        <input id="setUser" type="text" spellcheck="false" autocomplete="username" autocapitalize="off"></label>
+      <label class="f" style="margin-top:12px"><span>访问口令（至少 8 位）</span>
         <input id="setPw" type="password" spellcheck="false" autocomplete="new-password" placeholder="留空则不改"></label>
-      <div class="hint">改完只影响新登录，当前这个浏览器不会被踢下线。</div>
+      <div class="hint">改用户名或口令后，其他浏览器的登录会被踢下线，当前这个保留。</div>
+
+      <div class="usec" style="margin-top:16px">
+        <h3>两步验证 <span id="totpState"></span></h3>
+        <div id="totpSetup" hidden>
+          <div class="hint">在手机验证器（Google Authenticator、Microsoft Authenticator 等）里添加这个密钥，或在手机上直接点链接：</div>
+          <div class="linkbox mono" id="totpSecret" style="margin:6px 0"></div>
+          <a id="totpLink" href="#" class="mono" style="font-size:11px">在验证器里打开</a>
+        </div>
+        <div class="urow" style="margin-top:8px">
+          <input id="totpCode" type="text" inputmode="numeric" maxlength="6" placeholder="6 位验证码" autocomplete="one-time-code">
+          <button id="totpBegin">开启两步验证</button>
+          <button class="primary" id="totpConfirm" hidden>确认开启</button>
+          <button class="danger" id="totpOff" hidden>关闭两步验证</button>
+        </div>
+      </div>
+
+      <div class="usec" style="margin-top:16px">
+        <h3>登录会话 <span class="dim" id="sessCount"></span></h3>
+        <div class="urow"><span class="spacer"></span><button id="sessKick">踢掉其他浏览器</button></div>
+      </div>
 
       <label class="f" style="margin-top:16px"><span>访问路径</span>
         <input id="setPath" type="text" spellcheck="false" placeholder="留空则去掉路径前缀"></label>
@@ -470,7 +493,6 @@ const indexTemplate = `<!DOCTYPE html>
         <label class="field" id="ncDomainWrap"><span>证书域名</span><select id="ncDomain"></select></label>
         <label class="chk" id="ncAddTLSWrap" style="margin-bottom:12px"><input type="checkbox" id="ncAddTLS"> 给这个入站加 TLS（用上面选的证书）</label>
       </div>
-      <div class="hintline">添加后会自动放行端口、写分享链接、重建订阅并重载 sing-box。</div>
     </div>
     <div class="foot">
       <span class="spacer"></span>
@@ -513,7 +535,6 @@ const indexTemplate = `<!DOCTYPE html>
         <input id="saUUID" type="text" placeholder="留空即可" spellcheck="false"></label>
       <div class="field"><span>挂到哪些入站</span>
         <div class="checklist" id="saFiles"></div></div>
-      <div class="hintline">会为每个入站写一条同名用户、生成链接与订阅地址，并加一条 Nginx 订阅片段。</div>
     </div>
     <div class="foot">
       <span class="spacer"></span>
@@ -556,21 +577,20 @@ const indexTemplate = `<!DOCTYPE html>
       </button>
     </div>
     <div class="body">
-      <label class="field"><span>域名</span>
-        <input id="pxDomain" type="text" placeholder="app.example.com" spellcheck="false"></label>
+      <label class="field"><span>域名 / IP（从已有证书里选）</span>
+        <select id="pxDomain"></select></label>
       <div class="row2">
         <label class="field"><span>监听端口</span>
           <input id="pxPort" type="text" inputmode="numeric" value="443"></label>
         <label class="field"><span>反代目标</span>
           <input id="pxTarget" type="text" value="127.0.0.1:9393" spellcheck="false"></label>
       </div>
-      <label class="chk" style="margin-bottom:10px"><input type="checkbox" id="pxTLS" checked> 开 HTTPS（用 /root/cert/&lt;域名&gt; 的证书）</label>
+      <label class="chk" style="margin-bottom:10px"><input type="checkbox" id="pxTLS" checked> 开 HTTPS</label>
       <label class="chk" style="margin-bottom:12px"><input type="checkbox" id="pxWS"> 支持 WebSocket</label>
       <label class="field"><span>文件名（留空按域名生成）</span>
         <input id="pxName" type="text" placeholder="app-example-com" spellcheck="false"></label>
       <label class="field"><span>额外 location 指令（可选，一行一条）</span>
         <textarea id="pxExtra" class="code" style="min-height:80px" spellcheck="false"></textarea></label>
-      <div class="hintline">保存前会跑 nginx -t，不通过自动还原；证书要在「证书」里先申请好。</div>
     </div>
     <div class="foot">
       <span class="spacer"></span>
@@ -590,6 +610,12 @@ const indexTemplate = `<!DOCTYPE html>
       </button>
     </div>
     <div class="body">
+      <details class="cfonce" id="ciOnce"><summary>临时使用 Cloudflare 凭证（用完即删，不保存）</summary>
+        <label class="field"><span>API Token</span><input id="ciTok" type="password" autocomplete="off" spellcheck="false" placeholder="留空则用已保存的凭证"></label>
+        <div class="row2"><label class="field"><span>或：登录邮箱</span><input id="ciMail" type="text" autocomplete="off" spellcheck="false"></label>
+        <label class="field"><span>Global API Key</span><input id="ciKey" type="password" autocomplete="off" spellcheck="false"></label></div>
+        <button type="button" id="ciLoad">用这个凭证读取域名</button>
+      </details>
       <label class="field"><span>Cloudflare 域名</span><select id="ciZone"></select></label>
       <div class="row2">
         <label class="field"><span>模式</span>
@@ -603,7 +629,6 @@ const indexTemplate = `<!DOCTYPE html>
           <input id="ciPrefix" type="text" placeholder="node"></label>
       </div>
       <label class="chk" style="margin-bottom:12px"><input type="checkbox" id="ciWild"> Origin CA 申请泛域名</label>
-      <div class="hintline">用 acme.sh + DNS-01 申请 Let's Encrypt 证书，自动续期并 reload nginx / sing-box；Origin CA 只在 Cloudflare 代理下有效。</div>
       <textarea id="ciLog" class="code" spellcheck="false" hidden></textarea>
     </div>
     <div class="foot">
@@ -640,7 +665,6 @@ const indexTemplate = `<!DOCTYPE html>
         <label class="field"><span>Global API Key</span>
           <input id="cfKey" type="password" autocomplete="new-password" spellcheck="false"></label>
       </div>
-      <div class="hintline">Token 存 /etc/sing-box/token（0600），与脚本的 token 管理共用；Global Key 存 0600 文件。保存时先验证，不通过就保留原来的。</div>
     </div>
     <div class="foot">
       <button class="danger" id="cfClear">删除凭证</button>

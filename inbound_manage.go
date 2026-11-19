@@ -285,13 +285,19 @@ func handleNodeCDN(w http.ResponseWriter, r *http.Request) {
 		Zone   string `json:"zone"`
 		Prefix string `json:"prefix"`
 		Domain string `json:"domain"`
+		cfOnce
 	}
 	if !c.decode(&body) {
 		return
 	}
 	switch body.Action {
 	case "enable":
-		domain, link, err := enableCDN(body.File, body.Zone, body.Prefix)
+		var domain, link string
+		err := withCFOnce(body.cfOnce, func() error {
+			var e error
+			domain, link, e = enableCDN(body.File, body.Zone, body.Prefix)
+			return e
+		})
 		recordOp("开启 CDN", body.File+" "+domain, err)
 		if err != nil && domain == "" {
 			c.fail(http.StatusOK, "%s", safeErrText(err.Error()))
@@ -303,7 +309,7 @@ func handleNodeCDN(w http.ResponseWriter, r *http.Request) {
 		}
 		c.ok(resp)
 	case "disable":
-		err := disableCDN(body.File, body.Domain)
+		err := withCFOnce(body.cfOnce, func() error { return disableCDN(body.File, body.Domain) })
 		recordOp("关闭 CDN", body.File+" "+body.Domain, err)
 		if err != nil {
 			c.fail(http.StatusOK, "%s", safeErrText(err.Error()))
@@ -325,11 +331,17 @@ func handleNodeTunnel(w http.ResponseWriter, r *http.Request) {
 		File   string `json:"file"`
 		Zone   string `json:"zone"`
 		Prefix string `json:"prefix"`
+		cfOnce
 	}
 	if !c.decode(&body) {
 		return
 	}
-	host, link, err := enableFixedTunnel(body.File, body.Zone, body.Prefix)
+	var host, link string
+	err := withCFOnce(body.cfOnce, func() error {
+		var e error
+		host, link, e = enableFixedTunnel(body.File, body.Zone, body.Prefix)
+		return e
+	})
 	recordOp("开启固定隧道", body.File+" "+host, err)
 	if err != nil {
 		c.fail(http.StatusOK, "%s", safeErrText(err.Error()))

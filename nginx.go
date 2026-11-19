@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -352,8 +353,9 @@ type proxySpec struct {
 // buildProxyConf 生成一个反向代理 server 块。
 func buildProxyConf(spec proxySpec) (string, error) {
 	domain := strings.TrimSpace(spec.Domain)
-	if !validDomain(domain) {
-		return "", fmt.Errorf("域名格式无效")
+	isIP := net.ParseIP(domain) != nil
+	if !isIP && !validDomain(strings.TrimPrefix(domain, "*.")) {
+		return "", fmt.Errorf("域名或 IP 格式无效")
 	}
 	if !validPort(spec.ListenPort) {
 		return "", fmt.Errorf("监听端口无效")
@@ -377,8 +379,19 @@ func buildProxyConf(spec proxySpec) (string, error) {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "# fanout 生成的反向代理：%s → %s\n", domain, target)
-	fmt.Fprintf(&b, "server {\n    listen %d;\n    listen [::]:%d;\n    server_name %s;\n",
-		spec.ListenPort, spec.ListenPort, domain)
+	ssl := ""
+	if spec.TLS && spec.ListenPort != 80 {
+		ssl = " ssl"
+	}
+	serverName := domain
+	if isIP {
+		// 用 IP 访问时 Host 头就是 IP，server_name 写 IP 也能匹配；IPv6 要加方括号
+		if strings.Contains(domain, ":") {
+			serverName = "[" + domain + "]"
+		}
+	}
+	fmt.Fprintf(&b, "server {\n    listen %d%s;\n    listen [::]:%d%s;\n    server_name %s;\n",
+		spec.ListenPort, ssl, spec.ListenPort, ssl, serverName)
 	if spec.TLS {
 		cert, key := certPathsFor(domain)
 		if !pathExists(cert) || !pathExists(key) {
@@ -388,7 +401,7 @@ func buildProxyConf(spec proxySpec) (string, error) {
 		b.WriteString("    ssl_protocols TLSv1.2 TLSv1.3;\n    ssl_ciphers HIGH:!aNULL:!MD5;\n")
 		fmt.Fprintf(&b, "    add_header Strict-Transport-Security \"max-age=31536000\" always;\n")
 		if spec.ListenPort == 80 {
-			fmt.Fprintf(&b, "    return 301 https://%s$request_uri;\n", domain)
+			fmt.Fprintf(&b, "    return 301 https://$host$request_uri;\n")
 			b.WriteString("}\n")
 			return b.String(), nil
 		}

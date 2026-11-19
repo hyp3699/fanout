@@ -265,7 +265,9 @@ func fillNodeRuntime(nodes []*node) {
 		dom, on, exists := quickTunnelState(unit)
 		n.QuickOn = on
 		n.QuickDomain = dom
-		if exists && (n.Listen == "127.0.0.1" || pathExists(filepath.Join(lp.QuickDir, fmt.Sprintf("%s-%d.dedicated", n.Kind, n.Number)))) {
+		// 专用临时隧道：脚本的标记文件为准；老安装没有标记时看「只听 127.0.0.1 且有隧道服务」
+		if pathExists(filepath.Join(lp.QuickDir, fmt.Sprintf("%s-%d.dedicated", n.Kind, n.Number))) ||
+			(exists && n.Listen == "127.0.0.1") {
 			n.Quick = true
 		}
 		n.CDNDomains = nodeCDNDomains(n)
