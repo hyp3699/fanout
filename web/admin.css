@@ -22,6 +22,10 @@
 .card .acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}
 .card .acts button{font-size:11px;padding:4px 9px}
 .card .acts .spacer{flex:1}
+.card .nrow{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:7px}
+.card .nbadges{display:flex;gap:5px;flex-wrap:wrap;flex:1;min-width:0}
+.card .nacts{display:flex;gap:6px;margin-left:auto}
+.card .nacts button{font-size:11px;padding:4px 9px}
 
 .badge{display:inline-flex;align-items:center;gap:4px;font-size:10px;line-height:1;
   padding:4px 7px;border-radius:999px;border:1px solid var(--line);color:var(--dim);

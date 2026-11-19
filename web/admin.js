@@ -179,14 +179,12 @@ function nodeCardHTML(n){
       + '<span class="badge">' + esc(n.protocol) + '</span>'
       + '<span class="badge acc">:' + n.port + '</span></div>'
       + '<div class="sub">' + (n.remark ? esc(n.remark) + ' · ' : '') + users + ' 个用户' + esc(quick) + '</div>'
-      + '<div class="top" style="margin-top:7px;gap:5px">' + nodeBadges(n) + '</div>'
-      + '<div class="acts">'
+      + '<div class="nrow"><div class="nbadges">' + nodeBadges(n) + '</div>'
+      + '<div class="nacts">'
       + '<button data-nact="manage">管理</button>'
       + '<button data-nact="links">链接</button>'
       + '<button data-nact="config">配置</button>'
-      + '<span class="spacer"></span>'
-      + '<button class="danger" data-nact="delete">删除</button>'
-      + '</div></div>';
+      + '</div></div></div>';
   }
 }
 
@@ -200,7 +198,6 @@ document.addEventListener('click', async e => {
   if(act === 'manage') return openNodeSheet(file);
   if(act === 'links') return showNodeLinks(file);
   if(act === 'config') return showNodeConfig(file);
-  if(act === 'delete') return deleteNodeUI(file);
 });
 
 async function showNodeLinks(file){
@@ -390,7 +387,7 @@ function bindNodeSheet(n){
       postJSON('/api/nodes/cred', {file: file, user: u.name})), Promise.resolve())
       .then(() => { toast('凭据已全部换新'); openNodeSheet(file); loadNodes(true); });
   };
-  $('#nPortSave').onclick = () => {
+  if($('#nPortSave')) $('#nPortSave').onclick = () => {
     const p = Number($('#nPort').value);
     if(!p) return toast('端口要填数字', true);
     run('/api/nodes/port', {file: file, port: p}, '端口已改');
