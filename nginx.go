@@ -360,6 +360,9 @@ func buildProxyConf(spec proxySpec) (string, error) {
 	if !validPort(spec.ListenPort) {
 		return "", fmt.Errorf("监听端口无效")
 	}
+	if isIP && (!spec.TLS || spec.ListenPort == 80) {
+		return "", fmt.Errorf("IP 反代只能用 HTTPS：先在「证书」里申请 IP 证书，端口不要用 80")
+	}
 	target, err := normalizeTarget(spec.Target)
 	if err != nil {
 		return "", err

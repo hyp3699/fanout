@@ -781,14 +781,12 @@ async function openProxySheet(){
   (infraState.certs || []).forEach(c => { if(c.domain && !names.includes(c.domain)) names.push(c.domain); });
   const ip = nodesState.public_ip || '';
   let opts = names.map(d => '<option value="' + esc(d) + '">' + esc(d) + '</option>').join('');
-  if(ip && !names.includes(ip)) opts += '<option value="' + esc(ip) + '" data-nocert="1">' + esc(ip) + '（本机 IP，没有证书只能 HTTP）</option>';
-  $('#pxDomain').innerHTML = opts || '<option value="">（还没有证书，先在下面「证书」里申请）</option>';
+  $('#pxDomain').innerHTML = opts || '<option value="">（还没有证书，先申请域名或 IP 证书）</option>';
+  // IP 只能 HTTPS
   $('#pxDomain').onchange = () => {
-    const o = $('#pxDomain').selectedOptions[0];
-    const nocert = o && o.dataset.nocert === '1';
-    $('#pxTLS').checked = !nocert;
-    $('#pxTLS').disabled = nocert;
-    if(nocert && $('#pxPort').value === '443') $('#pxPort').value = '80';
+    const isIP = /^[0-9.]+$|:/.test($('#pxDomain').value);
+    if(isIP){ $('#pxTLS').checked = true; if($('#pxPort').value === '80') $('#pxPort').value = '443'; }
+    $('#pxTLS').disabled = isIP;
   };
   $('#pxPort').value = '443';
   $('#pxTarget').value = '127.0.0.1:9393';
@@ -817,10 +815,19 @@ async function submitProxy(){
   loadInfra();
 }
 
+function syncCertMode(){
+  const ip = $('#ciMode').value === 'ip';
+  $('#ciIPWrap').hidden = !ip;
+  $('#ciCFWrap').hidden = ip;
+}
 function openCertIssue(){
   clearCFOnce('ci');
+  const ip = nodesState.public_ip || '';
+  $('#ciIP').innerHTML = ip ? '<option>' + esc(ip) + '</option>' : '<option value="">（没读到公网 IP）</option>';
+  $('#ciMode').onchange = syncCertMode;
   fillZoneSelect('#ciZone');
   $('#ciMode').value = 'sub';
+  syncCertMode();
   $('#ciPrefix').value = '';
   $('#ciLog').value = '';
   $('#ciLog').hidden = true;
@@ -836,8 +843,9 @@ async function submitCertIssue(){
     zone: $('#ciZone').value,
     mode: $('#ciMode').value,
     prefix: $('#ciPrefix').value.trim(),
-    wildcard: $('#ciWild').checked
-  }, cfOnceBody('ci')));
+    wildcard: $('#ciWild').checked,
+    ip: $('#ciIP').value
+  }, $('#ciMode').value === 'ip' ? {} : cfOnceBody('ci')));
   clearCFOnce('ci');
   btn.disabled = false;
   btn.textContent = old;
@@ -910,7 +918,6 @@ function renderSystem(){
   $('#sysver').textContent = 'fanout ' + (o.version || '');
   $('#sysinfo').innerHTML = '<div class="kvgrid">'
     + kv('版本', o.version || '—') + kv('sing-box', o.singbox_version || '—')
-    + kv('公网 IP', o.public_ip || '—') + kv('主机', o.hostname || '—')
     + kv('入站', o.node_count || 0) + kv('用户', o.user_count || 0)
     + kv('配置文件', o.conf_count || 0) + kv('防火墙', o.firewall === 'drop' ? '开启（drop）' : '放行（accept）')
     + '</div>';

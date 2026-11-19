@@ -109,7 +109,7 @@ func listCerts() []certItem {
 				continue
 			}
 			domain := e.Name()
-			if !validDomain(strings.TrimPrefix(domain, "*.")) && !validDomain(domain) {
+			if !validDomain(strings.TrimPrefix(domain, "*.")) && !validDomain(domain) && net.ParseIP(domain) == nil {
 				continue
 			}
 			dir := filepath.Join(base, domain)
@@ -281,11 +281,22 @@ type certIssueSpec struct {
 	Mode     string `json:"mode"`     // root / sub / wildcard / origin_ca
 	Prefix   string `json:"prefix"`   // sub 模式的前缀
 	Wildcard bool   `json:"wildcard"` // Origin CA 也可以带通配
+	IP       string `json:"ip"`       // ip 模式：要签的 IP（留空用本机公网 IP）
 	cfOnce
 }
 
 // certDomainFor 算出要签发的域名。
 func certDomainFor(spec certIssueSpec) (string, error) {
+	if spec.Mode == "ip" {
+		ip := strings.TrimSpace(spec.IP)
+		if ip == "" {
+			ip = hostPublicIP()
+		}
+		if net.ParseIP(ip) == nil {
+			return "", fmt.Errorf("IP 无效：%s", ip)
+		}
+		return ip, nil
+	}
 	zone := strings.TrimSpace(spec.Zone)
 	if !validDomain(zone) {
 		return "", fmt.Errorf("请选择一个 Cloudflare 域名")
@@ -342,6 +353,9 @@ func runWithTimeout(env []string, timeout time.Duration, name string, args ...st
 
 // issueCert 申请证书。acme.sh + DNS-01，或者 Cloudflare Origin CA。
 func issueCert(spec certIssueSpec) (*certItem, string, error) {
+	if spec.Mode == "ip" {
+		return issueIPCert(spec)
+	}
 	lp := panelPaths()
 	creds := loadCFCreds()
 	if creds == nil {
@@ -472,3 +486,87 @@ func certPathsFor(domain string) (string, string) {
 
 // selfSignedCertPath 是网页建 TLS 入站时的默认证书。
 func selfSignedCertPath() (string, string, error) { return ensureSelfSignedCert() }
+
+// 与 sing-box-08.sh「申请 IP 证书」同一套做法：Let's Encrypt shortlived（6 天）+ 80 端口 standalone，
+// 申请前临时停掉占 80 的服务、结束后拉起；acme.sh 每天检查，剩 3 天就自动续。
+const release80Script = `#!/bin/bash
+if command -v ss >/dev/null 2>&1; then
+    occupant=$(ss -tulpn 'sport = :80' 2>/dev/null | grep -o 'users:(("[^"]*"' | cut -d'"' -f2 | head -n1)
+    if [[ -n "$occupant" ]] && systemctl is-active --quiet "$occupant" 2>/dev/null; then
+        systemctl stop "$occupant" >/dev/null 2>&1
+        echo "$occupant" > /root/last_80_occupant.txt
+        sleep 1
+    fi
+    for pid in $(ss -tulpn 'sport = :80' 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d'=' -f2 | sort -u); do
+        kill -0 "$pid" 2>/dev/null && kill -9 "$pid" >/dev/null 2>&1
+    done
+    sleep 1
+fi
+if command -v fuser >/dev/null 2>&1; then
+    fuser -k -9 80/tcp >/dev/null 2>&1
+    sleep 1
+fi
+`
+
+const restore80Script = `#!/bin/bash
+if [[ -f /root/last_80_occupant.txt ]]; then
+    occupant=$(cat /root/last_80_occupant.txt)
+    [[ -n "$occupant" ]] && systemctl start "$occupant" >/dev/null 2>&1
+    rm -f /root/last_80_occupant.txt
+fi
+`
+
+func issueIPCert(spec certIssueSpec) (*certItem, string, error) {
+	lp := panelPaths()
+	ip, err := certDomainFor(spec)
+	if err != nil {
+		return nil, "", err
+	}
+	var log strings.Builder
+	acme, err := ensureAcmeSh(&log)
+	if err != nil {
+		return nil, log.String(), err
+	}
+	rel, res := "/root/release_80.sh", "/root/restore_80.sh"
+	if err := writeFileAtomic(rel, []byte(release80Script), 0755); err != nil {
+		return nil, log.String(), err
+	}
+	if err := writeFileAtomic(res, []byte(restore80Script), 0755); err != nil {
+		return nil, log.String(), err
+	}
+	saveDir := filepath.Join(lp.CertDirs[0], ip)
+	if err := os.MkdirAll(saveDir, 0755); err != nil {
+		return nil, log.String(), err
+	}
+	_, _ = runWithTimeout(nil, 60*time.Second, acme, "--set-default-ca", "--server", "letsencrypt")
+	out, err := runWithTimeout(nil, 300*time.Second, acme,
+		"--issue", "-d", ip, "--standalone", "--httpport", "80", "-k", "ec-256",
+		"--server", "letsencrypt", "--cert-profile", "shortlived", "--days", "3", "--force",
+		"--pre-hook", rel, "--post-hook", res)
+	log.WriteString(trimOut(out))
+	if err != nil {
+		_, _ = adminExec("bash", res)
+		return nil, log.String(), fmt.Errorf("IP 证书申请失败（80 端口要能从外网访问）")
+	}
+	out, err = runWithTimeout(nil, 120*time.Second, acme,
+		"--installcert", "-d", ip, "--ecc",
+		"--key-file", filepath.Join(saveDir, "privkey.pem"),
+		"--fullchain-file", filepath.Join(saveDir, "fullchain.pem"),
+		"--reloadcmd", "systemctl reload nginx >/dev/null 2>&1; systemctl reload sing-box >/dev/null 2>&1; true")
+	log.WriteString(trimOut(out))
+	if err != nil {
+		return nil, log.String(), fmt.Errorf("证书安装失败")
+	}
+	_, _ = runWithTimeout(nil, 60*time.Second, acme, "--upgrade", "--auto-upgrade")
+	if !pathExists(filepath.Join(saveDir, "fullchain.pem")) {
+		return nil, log.String(), fmt.Errorf("证书文件没有生成")
+	}
+	_ = os.Chmod(filepath.Join(saveDir, "privkey.pem"), 0600)
+	item := certByDomain(ip)
+	if item == nil {
+		item = &certItem{Domain: ip, Dir: saveDir,
+			CertPath: filepath.Join(saveDir, "fullchain.pem"),
+			KeyPath:  filepath.Join(saveDir, "privkey.pem"), HasKey: true}
+	}
+	return item, log.String(), nil
+}

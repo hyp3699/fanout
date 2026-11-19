@@ -345,7 +345,8 @@ async function poll(){
 // ---- 新建向导 ----
 let regions = [], region = '', regionsLoaded = false;
 
-function openModal(id){ $('#' + id).classList.add('open'); }
+// 打开时挪到 body 最后：后开的弹窗永远叠在前一个上面（比如节点面板里点限速/流量）
+function openModal(id){ const m = $('#' + id); document.body.appendChild(m); m.classList.add('open'); }
 function closeModal(id){ $('#' + id).classList.remove('open'); }
 
 document.addEventListener('click', e => {

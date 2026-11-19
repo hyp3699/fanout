@@ -318,13 +318,12 @@ const indexTemplate = `<!DOCTYPE html>
       <div class="f"><span class="lbl">用户（按入站里的用户名匹配，可多选）</span>
         <div class="inchk" id="rins"></div></div>
       <label class="f"><span>目标</span>
-        <select id="rexit"></select>
-        <div class="hint">fanout 出口没连通时这条规则暂不写进配置，连通后自动生效；已有出站的规则始终生效。</div></label>
-      <label class="chk" style="margin-bottom:14px"><input type="checkbox" id="rall"> 全部流量：不看条件，所选用户的所有流量都走这个目标</label>
+        <select id="rexit"></select></label>
+      <label class="chk" style="margin-bottom:14px"><input type="checkbox" id="rall"> 全部流量都走这个目标</label>
       <div id="rconds">
         <label class="f"><span>自定义域名</span>
           <textarea id="rdomains" class="dom" spellcheck="false" placeholder="netflix.com&#10;full:www.example.com&#10;keyword:nflx&#10;regex:^.+\.example\.org$&#10;203.0.113.0/24"></textarea>
-          <div class="hint">一行一个，也可以用逗号或空格隔开。直接写 netflix.com 匹配它和所有子域；full: 只匹配这个域名；keyword: 关键字；regex: 正则；IP / CIDR 匹配目标地址。</div></label>
+</label>
         <div class="f"><span class="lbl">已有规则集（可多选）</span>
           <div class="inchk" id="rlocal"></div></div>
         <div class="f"><span class="lbl">自定义规则集</span>
@@ -333,9 +332,8 @@ const indexTemplate = `<!DOCTYPE html>
             <svg viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
             添加规则集
           </button>
-          <div class="hint">geosite:netflix、geoip:jp 自动用 SagerNet 官方规则集；也可以填远程地址（.srs 是 binary，.json 是 source，看不出来就手动选）。保存时先下载校验一次，sing-box 之后每天自己更新。</div></div>
-        <label class="chk"><input type="checkbox" id="rresolve"> 规则集里有 IP 段：先把域名解析成 IP 再匹配一遍</label>
-        <div class="hint">填了 IP/CIDR、geoip:，或选了名字带 geoip 的已有规则集时会自动解析，不用勾。</div>
+</div>
+        <label class="chk"><input type="checkbox" id="rresolve"> 先解析域名再匹配 IP 段</label>
       </div>
       <label class="chk" style="margin-top:14px"><input type="checkbox" id="renabled" checked> 启用</label>
     </div>
@@ -610,6 +608,16 @@ const indexTemplate = `<!DOCTYPE html>
       </button>
     </div>
     <div class="body">
+      <label class="field"><span>模式</span>
+          <select id="ciMode">
+            <option value="ip">IP 证书（Let's Encrypt，自动续期）</option>
+            <option value="root">根域名</option>
+            <option value="sub" selected>子域名前缀</option>
+            <option value="wildcard">泛域名</option>
+            <option value="origin_ca">Cloudflare Origin CA（15 年）</option>
+          </select></label>
+      <label class="field" id="ciIPWrap"><span>IP</span><select id="ciIP"></select></label>
+      <div id="ciCFWrap">
       <details class="cfonce" id="ciOnce"><summary>临时使用 Cloudflare 凭证（用完即删，不保存）</summary>
         <label class="field"><span>API Token</span><input id="ciTok" type="password" autocomplete="off" spellcheck="false" placeholder="留空则用已保存的凭证"></label>
         <div class="row2"><label class="field"><span>或：登录邮箱</span><input id="ciMail" type="text" autocomplete="off" spellcheck="false"></label>
@@ -618,17 +626,11 @@ const indexTemplate = `<!DOCTYPE html>
       </details>
       <label class="field"><span>Cloudflare 域名</span><select id="ciZone"></select></label>
       <div class="row2">
-        <label class="field"><span>模式</span>
-          <select id="ciMode">
-            <option value="root">根域名</option>
-            <option value="sub" selected>子域名前缀</option>
-            <option value="wildcard">泛域名</option>
-            <option value="origin_ca">Cloudflare Origin CA（15 年）</option>
-          </select></label>
         <label class="field"><span>前缀（子域名时填）</span>
           <input id="ciPrefix" type="text" placeholder="node"></label>
       </div>
       <label class="chk" style="margin-bottom:12px"><input type="checkbox" id="ciWild"> Origin CA 申请泛域名</label>
+      </div>
       <textarea id="ciLog" class="code" spellcheck="false" hidden></textarea>
     </div>
     <div class="foot">

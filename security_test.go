@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -138,10 +140,20 @@ func TestCFOnceIsNotSaved(t *testing.T) {
 }
 
 func TestProxyConfIPAndSSL(t *testing.T) {
-	setupPanel(t)
-	conf, err := buildProxyConf(proxySpec{Domain: "1.2.3.4", ListenPort: 8080, Target: "127.0.0.1:3000"})
-	if err != nil || !strings.Contains(conf, "server_name 1.2.3.4;") {
-		t.Fatalf("IP 反代: %v\n%s", err, conf)
+	lp, _ := setupPanel(t)
+	if _, err := buildProxyConf(proxySpec{Domain: "1.2.3.4", ListenPort: 8080, Target: "127.0.0.1:3000"}); err == nil {
+		t.Fatal("IP 反代不开 HTTPS 应拒绝")
+	}
+	dir := filepath.Join(lp.CertDirs[0], "1.2.3.4")
+	_ = os.MkdirAll(dir, 0755)
+	_ = os.WriteFile(filepath.Join(dir, "fullchain.pem"), []byte("x"), 0644)
+	_ = os.WriteFile(filepath.Join(dir, "privkey.pem"), []byte("x"), 0600)
+	conf, err := buildProxyConf(proxySpec{Domain: "1.2.3.4", ListenPort: 8443, TLS: true, Target: "127.0.0.1:3000"})
+	if err != nil || !strings.Contains(conf, "server_name 1.2.3.4;") || !strings.Contains(conf, "listen 8443 ssl;") {
+		t.Fatalf("IP HTTPS 反代: %v\n%s", err, conf)
+	}
+	if d, err := certDomainFor(certIssueSpec{Mode: "ip", IP: "1.2.3.4"}); err != nil || d != "1.2.3.4" {
+		t.Fatalf("IP 证书域名: %v %s", err, d)
 	}
 }
 
