@@ -437,7 +437,7 @@ const indexTemplate = `<!DOCTYPE html>
       <div class="hint" id="setPathHint">界面挂在这个路径下，扫端口的探不到。只能用字母数字和 - _。</div>
 
       <label class="f" style="margin-top:16px"><span>节点后端</span></label>
-      <div class="hint" id="setBackendHint">sing-box：fanout 只写配置目录里的 fanout-outbounds.json 和 fanout-route.json。</div>
+      <div class="hint" id="setBackendHint" hidden></div>
 
       <label class="chk" style="margin-top:16px"><input type="checkbox" id="setResi"> 只用家宽节点</label>
       <div class="hint" id="setResiHint">vpngate 里混着一批它自己的机房机器，出口一眼看得出是数据中心。勾着就只挑志愿者家宽。</div>
@@ -483,10 +483,10 @@ const indexTemplate = `<!DOCTYPE html>
     </div>
     <div class="body">
       <label class="field"><span>类型</span><select id="ncKind"></select></label>
-      <div class="hintline" id="ncHint"></div>
       <label class="field" style="margin-top:12px"><span>端口（留空自动挑一个空闲端口）</span>
         <input id="ncPort" type="text" inputmode="numeric" placeholder="自动"></label>
-      <label class="field" id="ncSNIWrap"><span>Reality 伪装域名</span><select id="ncSNI"></select></label>
+      <div id="ncSNIWrap"><label class="field"><span>Reality 伪装域名</span><select id="ncSNI"></select></label>
+      <label class="field"><span>自定义域名（填了就用它）</span><input id="ncSNICustom" type="text" spellcheck="false" autocapitalize="off" placeholder="www.example.com"></label></div>
       <div id="ncTLSWrap">
         <label class="field" id="ncDomainWrap"><span>证书域名</span><select id="ncDomain"></select></label>
         <label class="chk" id="ncAddTLSWrap" style="margin-bottom:12px"><input type="checkbox" id="ncAddTLS"> 给这个入站加 TLS（用上面选的证书）</label>

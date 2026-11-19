@@ -333,7 +333,7 @@ async function poll(){
     view = await api('/api/exits');
     $('#panel').textContent = view.panel
       ? (backendName() + ': ' + view.panel)
-      : (view.panel_info || '');
+      : '';
     renderExits();
     renderRules();
     if(typeof onPollTick==='function') onPollTick();
@@ -786,10 +786,9 @@ async function loadBackendModes(){
   const hint = $('#setBackendHint');
   try{
     const m = await api('/api/backend');
-    hint.textContent = m.available
-      ? ('当前：' + m.describe + '。fanout 只写配置目录里的 fanout-outbounds.json 和 fanout-route.json。')
-      : ('sing-box 不可用：' + (m.reason || ''));
-  }catch(err){ hint.textContent = err.message; }
+    hint.hidden = !!m.available;
+    hint.textContent = m.available ? '' : ('sing-box 不可用：' + (m.reason || ''));
+  }catch(err){ hint.hidden = false; hint.textContent = err.message; }
 }
 
 function renderTOTP(on){

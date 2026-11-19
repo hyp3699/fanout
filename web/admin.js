@@ -497,9 +497,10 @@ function bindNodeSheet(n){
 
 function openNodeCreate(){
   const kinds = (nodesState.kinds || []).filter(k => k.kind !== 'cf-quick');
-  $('#ncKind').innerHTML = kinds.map(k => '<option value="' + k.kind + '">' + esc(k.label) + ' · ' + esc(k.note) + '</option>').join('');
+  $('#ncKind').innerHTML = kinds.map(k => '<option value="' + k.kind + '">' + esc(k.label) + '</option>').join('');
   $('#ncSNI').innerHTML = (nodesState.reality_sites || []).map(s => '<option>' + esc(s) + '</option>').join('');
   $('#ncSNI').value = (nodesState.reality_sites || []).slice(-1)[0] || 'www.iij.ad.jp';
+  $('#ncSNICustom').value = '';
   fillCertSelect('#ncDomain');
   updateKindFields();
   openModal('nodecreate');
@@ -513,7 +514,6 @@ function updateKindFields(){
   $('#ncDomainWrap').hidden = !(tls === 'domain');
   $('#ncAddTLSWrap').hidden = (tls !== 'optional');
   $('#ncSNIWrap').hidden = (tls !== 'reality');
-  $('#ncHint').textContent = k.note || '';
 }
 
 function fillCertSelect(sel){
@@ -1031,7 +1031,7 @@ function initAdmin(){
     const k = (nodesState.kinds || []).find(x => x.kind === kind) || {};
     const tls = k.tls || 'none';
     const body = {kind, port: Number($('#ncPort').value) || 0,
-      sni: $('#ncSNI').value, domain: $('#ncDomain').value};
+      sni: $('#ncSNICustom').value.trim() || $('#ncSNI').value, domain: $('#ncDomain').value};
     if(tls === 'optional') body.add_tls = $('#ncAddTLS').checked;
     const btn = $('#ncGo');
     btn.disabled = true;

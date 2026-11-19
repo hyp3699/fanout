@@ -585,7 +585,7 @@ const loginHTML = `<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>fanout</title>
+<title>登录</title>
 <style>
 body{margin:0;height:100vh;display:flex;flex-direction:column;gap:16px;
   align-items:center;justify-content:center;
@@ -606,7 +606,6 @@ button{width:100%;margin-top:14px;background:#4a9eda;border:0;color:#0b0e12;
 </head>
 <body>
 <form id="f">
-  <h1>fanout</h1>
   <label for="un">用户名</label>
   <input type="text" id="un" autofocus autocomplete="username" spellcheck="false" autocapitalize="off">
   <label for="pw" style="margin-top:12px">访问口令</label>
