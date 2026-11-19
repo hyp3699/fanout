@@ -86,6 +86,7 @@ func nginxTest() error {
 	if !nginxInstalled() {
 		return fmt.Errorf("本机没有安装 nginx")
 	}
+	pruneDanglingSites()
 	out, err := adminExec("nginx", "-t")
 	if err != nil {
 		return fmt.Errorf("nginx -t 未通过：%s", trimOut(out))
@@ -532,4 +533,16 @@ func portFromTarget(t string) int {
 	}
 	p, _ := strconv.Atoi(strings.TrimRight(t[i+1:], "/"))
 	return p
+}
+
+// pruneDanglingSites 清掉 sites-enabled 里指向已删除文件的断链，否则 nginx -t 直接失败。
+func pruneDanglingSites() {
+	matches, _ := filepath.Glob("/etc/nginx/sites-enabled/*")
+	for _, f := range matches {
+		if fi, err := os.Lstat(f); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+			if _, err := os.Stat(f); os.IsNotExist(err) {
+				_ = os.Remove(f)
+			}
+		}
+	}
 }
