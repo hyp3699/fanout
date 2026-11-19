@@ -198,9 +198,9 @@ function speedLabel(bps){
 function trafText(u){
   const t = u.traffic;
   if(!t) return '未设置';
-  if(t.disabled_by_limit && !t.enabled) return '已停用';
+  if(u.missing && !t.enabled) return '已停用';
   return fmtBytes(u.period_total) + ' / ' + fmtBytes(t.limit_bytes) + ' · ' + (PERIOD[t.period] || '不重置')
-    + (t.disabled_by_limit ? ' · 已停用' : '');
+    + (u.missing ? ' · 已停用' : '');
 }
 
 function renderUsers(){
@@ -217,7 +217,7 @@ function renderUsers(){
       ? '<span class="chip static miss" title="不在任何入站里（可能已到量停用）">不在入站</span>'
       : (u.inbounds || []).map(t => '<span class="chip static">' + esc(t) + '</span>').join('');
     const sp = u.speed ? (u.speed.text + ' ' + (MODE[u.speed.mode] || '')) : '未设置';
-    const tbad = u.traffic && u.traffic.disabled_by_limit;
+    const tbad = u.missing;
     return '<div class="rule">'
       + '<span class="rname">' + esc(u.name) + '</span>'
       + '<span class="chips">' + ins + '</span>'

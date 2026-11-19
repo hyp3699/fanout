@@ -25,7 +25,8 @@ type subscriber struct {
 	UUID        string   `json:"uuid"`
 	Path        string   `json:"path"`
 	SubURL      string   `json:"sub_url"`
-	Protocols   []string `json:"protocols"` // 出现在哪些入站 tag 里
+	Protocols   []string `json:"protocols"`             // 出现在哪些入站 tag 里
+	DisabledIn  []string `json:"disabled_in,omitempty"` // 到量被移出的入站
 	Links       []string `json:"links"`
 	HasSub      bool     `json:"has_sub"`
 	HasNginx    bool     `json:"has_nginx"`
@@ -83,6 +84,9 @@ func listSubscribers() []subscriber {
 					break
 				}
 			}
+		}
+		if len(sub.Protocols) == 0 {
+			sub.DisabledIn = disabledTags(name)
 		}
 		sub.TrafficUsed, sub.LimitBytes, sub.LimitOn = subscriberQuota(name)
 		if sp, ok := speeds[name]; ok {
@@ -561,6 +565,9 @@ func rebuildSubscriber(name string) (*subscriber, error) {
 	}
 	if detail.UUID == "" {
 		return nil, fmt.Errorf("用户 UUID 文件损坏")
+	}
+	if len(detail.Protocols) == 0 && len(disabledTags(name)) > 0 {
+		return nil, fmt.Errorf("用户已到量停用，先在 限速/流量 里解除")
 	}
 	files := make([]string, 0, len(detail.Protocols))
 	for _, tag := range detail.Protocols {

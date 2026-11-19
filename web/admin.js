@@ -56,7 +56,7 @@ function userLimitText(name){
   const tr = u.traffic && u.traffic.enabled
     ? ('流量 ' + fmtBytes(u.period_total) + ' / ' + fmtBytes(u.traffic.limit_bytes))
     : ('已用 ' + fmtBytes(u.total) + ' · 不限量');
-  return sp + ' · ' + tr + (u.traffic && u.traffic.disabled_by_limit ? ' · 已到量停用' : '');
+  return sp + ' · ' + tr;
 }
 
 function tag(cls, text){ return '<span class="badge ' + cls + '">' + esc(text) + '</span>'; }
@@ -171,15 +171,22 @@ function renderNodes(){
 }
 
 // 卡片上的限速/流量摘要：一个用户直接写，多个用户按用户名分开
+// 到量被移出这个入站的用户（入站里已经没有，但网页要能看到并解除）
+function nodeOffUsers(n){
+  const list = (typeof users !== 'undefined' && users && users.users) || [];
+  const have = new Set((n.users || []).map(u => u.name));
+  return list.filter(u => u.missing && (u.disabled_in || []).includes(n.tag) && !have.has(u.name)).map(u => u.name);
+}
+
 function nodeLimitText(n){
-  const names = (n.users || []).map(u => u.name).filter(Boolean);
+  const names = (n.users || []).map(u => u.name).filter(Boolean).concat(nodeOffUsers(n));
   const one = name => {
     const u = userLimitOf(name);
     if(!u) return '';
     const out = [];
     if(u.speed) out.push('限速 ' + String(u.speed.text || u.speed.speed).replace(/（.*$/, ''));
     if(u.traffic && u.traffic.enabled) out.push('流量 ' + fmtBytes(u.period_total) + '/' + fmtBytes(u.traffic.limit_bytes));
-    if(u.traffic && u.traffic.disabled_by_limit) out.push('已停用');
+    if(u.missing) out.push('已停用');
     return out.join(' ');
   };
   if(!names.length) return '';
@@ -296,6 +303,11 @@ function nodeSheetHTML(n, config){
       + (lim ? '<div class="ulim">' + esc(lim) + '</div>' : '') + '</span>'
       + (u.name ? '<button data-ulimit="' + esc(u.name) + '">限速/流量</button>' : '')
       + '<button data-cred="' + esc(u.name) + '">换 UUID</button></div>';
+  }).join('') + nodeOffUsers(n).map(name => {
+    const lim = userLimitText(name);
+    return '<div class="drow"><span class="grow"><b>' + esc(name) + '</b>'
+      + '<div class="ulim">已停用' + (lim ? ' · ' + esc(lim) : '') + '</div></span>'
+      + '<button data-ulimit="' + esc(name) + '">限速/流量</button></div>';
   }).join('');
   const tcp = n.port_ok && n.port_ok.tcp, udp = n.port_ok && n.port_ok.udp;
   const isReality = n.reality;
@@ -581,7 +593,9 @@ function renderSubs(){
       + '<div class="top"><span class="name">' + esc(s.name) + '</span>'
       + (s.speed_text ? '<span class="badge warn">' + esc(s.speed_text) + '</span>' : '') + '</div>'
       + '<div class="sub">' + esc(traf) + ' · ' + (s.links || []).length + ' 条节点</div>'
-      + '<div class="top" style="margin-top:6px;gap:5px">' + (chips || tag('bad', '没有挂任何入站')) + '</div>'
+      + '<div class="top" style="margin-top:6px;gap:5px">' + (chips || ((s.disabled_in || []).length
+          ? tag('bad', '已停用') + (s.disabled_in || []).map(p => '<span class="badge">' + esc(p) + '</span>').join('')
+          : tag('bad', '没有挂任何入站'))) + '</div>'
       + '<div class="sub mono">' + esc(s.sub_url || '（订阅地址未生成）') + '</div>'
       + (userLimitText(s.name) ? '<div class="ulim">' + esc(userLimitText(s.name)) + '</div>' : '')
       + '<div class="acts"><button data-sact="copy">复制订阅</button>'

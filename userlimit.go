@@ -68,7 +68,8 @@ type UserTrafficLimit struct {
 type UserView struct {
 	Name         string            `json:"name"`
 	Inbounds     []string          `json:"inbounds"`
-	Missing      bool              `json:"missing"` // 不在任何入站里（比如到量被停用）
+	Missing      bool              `json:"missing"`               // 不在任何入站里（比如到量被停用）
+	DisabledIn   []string          `json:"disabled_in,omitempty"` // 到量被移出的入站 tag
 	Uplink       int64             `json:"uplink"`
 	Downlink     int64             `json:"downlink"`
 	Total        int64             `json:"total"`
@@ -373,6 +374,17 @@ func listUsers() UsersView {
 			extra = append(extra, u)
 		}
 	}
+	if ents, err := os.ReadDir(umDisabledDir); err == nil {
+		for _, e := range ents {
+			u := e.Name()
+			if _, ok := where[u]; ok || !e.IsDir() {
+				continue
+			}
+			if _, ok := limits[u]; !ok {
+				extra = append(extra, u)
+			}
+		}
+	}
 	sort.Strings(extra)
 
 	var state struct {
@@ -386,6 +398,7 @@ func listUsers() UsersView {
 		if v.Inbounds == nil {
 			v.Inbounds = []string{}
 			v.Missing = true
+			v.DisabledIn = disabledTags(name)
 		}
 		if s := state.Users[name]; s != nil {
 			v.Uplink, v.Downlink = toInt64(s["uplink"]), toInt64(s["downlink"])
@@ -731,4 +744,37 @@ func apiUserTraffic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// disabledTags 读到量停用时的备份，找出用户原来所在的入站 tag。
+func disabledTags(name string) []string {
+	if !validUserName(name) {
+		return nil
+	}
+	files, _ := filepath.Glob(filepath.Join(umDisabledDir, name, "*.json"))
+	var tags []string
+	for _, f := range files {
+		var bk struct {
+			Users []struct {
+				Index int `json:"inbound_index"`
+			} `json:"users"`
+		}
+		if readJSONFile(f, &bk) != nil {
+			continue
+		}
+		var cfg struct {
+			Inbounds []struct {
+				Tag string `json:"tag"`
+			} `json:"inbounds"`
+		}
+		if readJSONFile(filepath.Join(singbox.ConfDir, filepath.Base(f)), &cfg) != nil {
+			continue
+		}
+		for _, u := range bk.Users {
+			if u.Index >= 0 && u.Index < len(cfg.Inbounds) && cfg.Inbounds[u.Index].Tag != "" {
+				tags = append(tags, cfg.Inbounds[u.Index].Tag)
+			}
+		}
+	}
+	return tags
 }
