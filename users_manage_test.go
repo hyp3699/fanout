@@ -34,6 +34,7 @@ func TestNextSubscriberName(t *testing.T) {
 
 func TestAddSubscriberEndToEnd(t *testing.T) {
 	lp, _ := setupPanel(t)
+	writeTestSubSite(t, lp)
 	writeTestNode(t, lp, "vless-ws-1.json", vlessWSSample)
 	_ = os.WriteFile(filepath.Join(lp.URLDir, "vless-ws-1.txt"),
 		[]byte("vless://aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee@203.0.113.9:23457?ed=2048&encryption=none&security=tls&sni=node.example.com&type=ws&path=/abcd-ws?ed=2048#🇯🇵vless_ws\n"), 0644)
@@ -102,6 +103,7 @@ func TestAddSubscriberRejectsDuplicateAndBadName(t *testing.T) {
 
 func TestDeleteSubscriber(t *testing.T) {
 	lp, _ := setupPanel(t)
+	writeTestSubSite(t, lp)
 	writeTestNode(t, lp, "vless-ws-1.json", vlessWSSample)
 	_ = os.WriteFile(filepath.Join(lp.URLDir, "vless-ws-1.txt"),
 		[]byte("vless://u@203.0.113.9:23457?security=tls&sni=node.example.com&type=ws&path=/abcd-ws#t\n"), 0644)
@@ -130,6 +132,7 @@ func TestDeleteSubscriber(t *testing.T) {
 
 func TestRebuildSubscriberKeepsUUID(t *testing.T) {
 	lp, _ := setupPanel(t)
+	writeTestSubSite(t, lp)
 	writeTestNode(t, lp, "vless-ws-1.json", vlessWSSample)
 	_ = os.WriteFile(filepath.Join(lp.URLDir, "vless-ws-1.txt"),
 		[]byte("vless://u@203.0.113.9:23457?security=tls&sni=node.example.com&type=ws&path=/abcd-ws#t\n"), 0644)
@@ -192,5 +195,42 @@ func TestLinkUsableFiltersBareIP(t *testing.T) {
 	}
 	if !linkUsable("vless://u@node.example.com:443?security=none") {
 		t.Error("域名地址应该保留")
+	}
+}
+
+func writeTestSubSite(t *testing.T, lp panelLayout) {
+	t.Helper()
+	conf := "server {\n    listen 443 ssl http2;\n    server_name sub.example.com;\n}\n"
+	if err := os.WriteFile(lp.NginxSubConf, []byte(conf), 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAddSubscriberCreatesSubSiteAndRejectsDuplicate(t *testing.T) {
+	lp, _ := setupPanel(t)
+	writeTestNode(t, lp, "vless-ws-1.json", vlessWSSample)
+	_ = os.WriteFile(filepath.Join(lp.URLDir, "vless-ws-1.txt"),
+		[]byte("vless://aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee@203.0.113.9:23457?security=tls&type=ws#x\n"), 0644)
+	if _, err := addSubscriber(subAddRequest{Name: "bob", Files: []string{"vless-ws-1.json"}}); err == nil {
+		t.Fatal("没有订阅主站也没选证书，应该报错")
+	}
+	if pathExists(filepath.Join(lp.URLDir, "bob")) {
+		t.Fatal("失败时不该留下用户目录")
+	}
+	cdir := filepath.Join(lp.CertDirs[0], "sub.example.com")
+	_ = os.MkdirAll(cdir, 0755)
+	_ = os.WriteFile(filepath.Join(cdir, "fullchain.pem"), []byte("x"), 0644)
+	_ = os.WriteFile(filepath.Join(cdir, "privkey.pem"), []byte("x"), 0644)
+	sub, err := addSubscriber(subAddRequest{Name: "bob", Files: []string{"vless-ws-1.json"},
+		SubCert: "sub.example.com", SubPort: 2053})
+	if err != nil {
+		t.Fatalf("加用户失败: %v", err)
+	}
+	if !strings.HasPrefix(sub.SubURL, "https://sub.example.com:2053/") {
+		t.Fatalf("订阅地址不对: %q", sub.SubURL)
+	}
+	if _, err := addSubscriber(subAddRequest{Name: "bob", Files: []string{"vless-ws-1.json"}}); err == nil ||
+		!strings.Contains(err.Error(), "已存在") {
+		t.Fatalf("重名应该拒绝，实际 %v", err)
 	}
 }

@@ -130,6 +130,7 @@ func TestNginxAPI(t *testing.T) {
 
 func TestSubsAPI(t *testing.T) {
 	lp, _ := setupPanel(t)
+	writeTestSubSite(t, lp)
 	writeTestNode(t, lp, "vless-ws-1.json", vlessWSSample)
 	_ = os.WriteFile(filepath.Join(lp.URLDir, "vless-ws-1.txt"),
 		[]byte("vless://u@203.0.113.9:23457?security=tls&sni=node.example.com&type=ws&path=/abcd-ws#t\n"), 0644)

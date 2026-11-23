@@ -558,7 +558,7 @@ function fillCertSelect(sel){
     : '<option value="">（还没有域名证书，先去「Nginx与证书」申请）</option>';
 }
 
-function openSubAdd(){
+async function openSubAdd(){
   $('#saName').value = '';
   $('#saUUID').value = '';
   const nodes = (nodesState.nodes || []);
@@ -566,7 +566,27 @@ function openSubAdd(){
     ? nodes.map(n => '<label><input type="checkbox" value="' + esc(n.file) + '" checked> '
       + esc(n.tag) + ' <span class="dim">:' + n.port + '</span></label>').join('')
     : '<div class="hintline">还没有入站，先添加一个</div>';
+  const go = $('#saGo'); go.disabled = false; go.textContent = '创建';
+  $('#saSite').hidden = true;
   openModal('subadd');
+  if(subsState.sub_ready === false){
+    let certs = infraState.certs || [];
+    if(!certs.length){ try{ const c = await api('/api/certs'); certs = infraState.certs = c.certs || []; }catch(e){} }
+    const wild = c => c.domain.startsWith('*.') || (c.dns_names || []).includes('*.' + c.domain);
+    const names = [];
+    certs.forEach(c => { if(c.domain && !c.self_signed && !names.some(x => x.domain === c.domain)) names.push(c); });
+    $('#saCert').innerHTML = names.length
+      ? names.map(c => '<option value="' + esc(c.domain) + '" data-wild="' + (wild(c) ? 1 : 0) + '">' + esc(c.domain) + '</option>').join('')
+      : '<option value="">（没有证书，先申请）</option>';
+    $('#saCert').onchange = () => {
+      const o = $('#saCert').selectedOptions[0];
+      $('#saPrefixRow').hidden = !(o && o.dataset.wild === '1');
+    };
+    $('#saCert').onchange();
+    $('#saPrefix').value = '';
+    $('#saPort').value = '443';
+    $('#saSite').hidden = false;
+  }
 }
 
 // ================= 用户管理 =================
@@ -647,16 +667,31 @@ document.addEventListener('click', async e => {
 });
 
 async function submitSubAdd(){
+  const go = $('#saGo');
+  if(go.disabled) return;
   const files = Array.from(document.querySelectorAll('#saFiles input:checked')).map(i => i.value);
-  const d = await postJSON('/api/subs/add', {
-    name: $('#saName').value.trim(),
-    uuid: $('#saUUID').value.trim(),
-    files
-  });
-  if(d.error) return toast(d.error, true);
+  if(!files.length) return toast('至少选一个入站', true);
+  const body = {name: $('#saName').value.trim(), uuid: $('#saUUID').value.trim(), files};
+  if(!$('#saSite').hidden){
+    if(!$('#saCert').value) return toast('先申请证书', true);
+    body.sub_cert = $('#saCert').value;
+    body.sub_prefix = $('#saPrefixRow').hidden ? '' : $('#saPrefix').value.trim();
+    body.sub_port = Number($('#saPort').value);
+  }
+  go.disabled = true; go.textContent = '创建中…';
+  let d;
+  try{ d = await postJSON('/api/subs/add', body); }
+  catch(e){ d = {error: '请求失败'}; }
+  go.disabled = false; go.textContent = '创建';
+  if(d.error){ toast(d.error, true); loadSubs(true); return; }
   closeModal('subadd');
-  toast('用户已创建');
-  loadSubs(); loadNodes(true);
+  const sub = d.sub || {};
+  toast('已创建 ' + (sub.name || ''));
+  loadSubs(); loadNodes(true); loadInfra();
+  $('#logtitle').textContent = '订阅 · ' + (sub.name || '');
+  $('#logtext').value = (sub.sub_url || '（订阅地址未生成）') + '\n\n' + (sub.links || []).join('\n');
+  $('#logcopy').onclick = () => copy(sub.sub_url || $('#logtext').value);
+  openModal('logbox');
 }
 
 // ================= Nginx 与证书 =================

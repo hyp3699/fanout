@@ -184,6 +184,11 @@ type subAddRequest struct {
 	UUID  string   `json:"uuid"`  // 留空随机
 	Path  string   `json:"path"`  // 订阅路径（重建时沿用原来的）
 	Files []string `json:"files"` // 要挂到哪些入站（*用户名-N.json*）
+
+	// 还没有订阅主站时一起建：证书（域名 / IP）、通配前缀、端口
+	SubCert   string `json:"sub_cert"`
+	SubPrefix string `json:"sub_prefix"`
+	SubPort   int    `json:"sub_port"`
 }
 
 // addSubscriber 在选中的入站里加一个用户，并生成链接 / 订阅 / Nginx 片段。
@@ -198,6 +203,17 @@ func addSubscriber(req subAddRequest) (*subscriber, error) {
 	}
 	if len(req.Files) == 0 {
 		return nil, fmt.Errorf("至少选一个入站")
+	}
+	if pathExists(filepath.Join(lp.URLDir, name)) {
+		return nil, fmt.Errorf("用户 %s 已存在", name)
+	}
+	if !subSiteReady() {
+		if err := writeSubSite(req.SubCert, req.SubPrefix, req.SubPort); err != nil {
+			return nil, err
+		}
+	}
+	if err := ensureSubService(); err != nil {
+		return nil, err
 	}
 	uuid := strings.TrimSpace(req.UUID)
 	if uuid == "" {

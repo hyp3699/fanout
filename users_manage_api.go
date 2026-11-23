@@ -31,7 +31,7 @@ func handleSubs(w http.ResponseWriter, r *http.Request) {
 		briefs = append(briefs, nodeBrief{File: n.File, Tag: n.Tag, Kind: n.Kind,
 			Port: n.Port, Users: len(n.Users)})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"subs": subs, "nodes": briefs})
+	writeJSON(w, http.StatusOK, map[string]any{"subs": subs, "nodes": briefs, "sub_ready": subSiteReady()})
 }
 
 // handleSubAdd 添加用户：挂到选中的入站上，生成链接与订阅。
@@ -44,7 +44,9 @@ func handleSubAdd(w http.ResponseWriter, r *http.Request) {
 	if !c.decode(&req) {
 		return
 	}
+	subMu.Lock()
 	sub, err := addSubscriber(req)
+	subMu.Unlock()
 	recordOp("添加用户", strings.Join(req.Files, ",")+" → "+req.Name, err)
 	if err != nil {
 		c.fail(http.StatusOK, "%s", safeErrText(err.Error()))
@@ -66,7 +68,9 @@ func handleSubDelete(w http.ResponseWriter, r *http.Request) {
 	if !c.decode(&body) {
 		return
 	}
+	subMu.Lock()
 	err := deleteSubscriber(body.Name, body.PreserveData)
+	subMu.Unlock()
 	recordOp("删除用户", body.Name, err)
 	if err != nil {
 		c.fail(http.StatusOK, "%s", safeErrText(err.Error()))
@@ -87,7 +91,9 @@ func handleSubRebuild(w http.ResponseWriter, r *http.Request) {
 	if !c.decode(&body) {
 		return
 	}
+	subMu.Lock()
 	sub, err := rebuildSubscriber(body.Name)
+	subMu.Unlock()
 	recordOp("重建用户订阅", body.Name, err)
 	if err != nil {
 		c.fail(http.StatusOK, "%s", safeErrText(err.Error()))

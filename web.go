@@ -528,6 +528,14 @@ const indexTemplate = `<!DOCTYPE html>
         <input id="saUUID" type="text" placeholder="留空即可" spellcheck="false"></label>
       <div class="field"><span>挂到哪些入站</span>
         <div class="checklist" id="saFiles"></div></div>
+      <div id="saSite" hidden>
+        <label class="field"><span>订阅域名</span><select id="saCert"></select></label>
+        <label class="field" id="saPrefixRow" hidden><span>前缀</span>
+          <input id="saPrefix" type="text" placeholder="sub" spellcheck="false"></label>
+        <label class="field"><span>订阅端口</span><select id="saPort">
+          <option>443</option><option>2053</option><option>2083</option><option>2087</option><option>2096</option><option>8443</option>
+        </select></label>
+      </div>
     </div>
     <div class="foot">
       <span class="spacer"></span>
