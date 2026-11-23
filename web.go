@@ -512,6 +512,32 @@ const indexTemplate = `<!DOCTYPE html>
   </div>
 </div>
 
+<div class="modal" id="submgr">
+  <div class="sheet">
+    <div class="head">
+      <h2 id="smTitle">管理</h2>
+      <span class="spacer"></span>
+      <button class="icon" data-close="submgr" title="关闭">
+        <svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
+    </div>
+    <div class="body">
+      <div class="sub mono" id="smURL"></div>
+      <div class="acts" style="flex-wrap:wrap;gap:6px;margin-top:10px">
+        <button data-smact="links">看节点</button>
+        <button data-smact="rebuild">重建</button>
+        <button data-smact="uuid">重置 UUID</button>
+        <button data-smact="path">重置订阅路径</button>
+      </div>
+    </div>
+    <div class="foot">
+      <button class="danger" data-smact="delete">删除</button>
+      <span class="spacer"></span>
+      <button data-close="submgr">关闭</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal" id="subadd">
   <div class="sheet">
     <div class="head">

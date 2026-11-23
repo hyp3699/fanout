@@ -86,15 +86,27 @@ func handleSubRebuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Name string `json:"name"`
+		Name  string `json:"name"`
+		Reset string `json:"reset"` // "" 重建 / uuid / path
 	}
 	if !c.decode(&body) {
 		return
 	}
+	op := "重建用户订阅"
+	switch body.Reset {
+	case "uuid":
+		op = "重置用户 UUID"
+	case "path":
+		op = "重置订阅路径"
+	case "":
+	default:
+		c.fail(http.StatusOK, "未知操作")
+		return
+	}
 	subMu.Lock()
-	sub, err := rebuildSubscriber(body.Name)
+	sub, err := rebuildSubscriberWith(body.Name, body.Reset == "uuid", body.Reset == "path")
 	subMu.Unlock()
-	recordOp("重建用户订阅", body.Name, err)
+	recordOp(op, body.Name, err)
 	if err != nil {
 		c.fail(http.StatusOK, "%s", safeErrText(err.Error()))
 		return

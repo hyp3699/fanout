@@ -174,3 +174,104 @@ func writeSubSite(cert, prefix string, port int) error {
 	_ = allowPort(port, "tcp")
 	return nil
 }
+
+// ensureSubIncludes：订阅域名+端口和别的站点（比如面板反代）是同一个时，nginx 只会用先加载的那个 server，
+// 订阅路径就落到别的站点上（面板回 404）。把用户订阅片段也 include 进那些 server 里。
+func ensureSubIncludes() bool {
+	host, port := nginxSubDomain()
+	if host == "" {
+		return false
+	}
+	if port == "" {
+		port = "443"
+	}
+	lp := panelPaths()
+	inc := lp.NginxUserDir + "/*.conf"
+	entries, err := os.ReadDir(lp.NginxConfDir)
+	if err != nil {
+		return false
+	}
+	any := false
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".conf") {
+			continue
+		}
+		path := lp.NginxConfDir + "/" + e.Name()
+		if path == lp.NginxSubConf {
+			continue
+		}
+		blob, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		out, changed := addSubInclude(string(blob), host, port, inc)
+		if changed && writeVerified(path, []byte(out), 0644, nginxTest) == nil {
+			any = true
+		}
+	}
+	return any
+}
+
+// addSubInclude 在 server_name 含 host、listen 含 port、还没有 include 的 server 块里补一行 include。
+func addSubInclude(text, host, port, inc string) (string, bool) {
+	lines := strings.Split(text, "\n")
+	depth := 0
+	start := -1
+	changed := false
+	var out []string
+	var block []string
+	flush := func() {
+		hasName, hasPort, hasInc, nameIdx := false, false, false, -1
+		for i, l := range block {
+			t := strings.TrimSpace(l)
+			if strings.HasPrefix(t, "server_name") {
+				for _, f := range strings.Fields(strings.TrimSuffix(strings.TrimPrefix(t, "server_name"), ";")) {
+					if strings.Trim(f, "[];") == host {
+						hasName, nameIdx = true, i
+					}
+				}
+			}
+			if strings.HasPrefix(t, "listen") {
+				for _, f := range strings.Fields(strings.TrimSuffix(t, ";")) {
+					f = strings.TrimSuffix(f, ";")
+					if f == port || strings.HasSuffix(f, ":"+port) {
+						hasPort = true
+					}
+				}
+			}
+			if strings.HasPrefix(t, "include") && strings.Contains(t, inc) {
+				hasInc = true
+			}
+		}
+		if hasName && hasPort && !hasInc {
+			b := append([]string{}, block[:nameIdx+1]...)
+			b = append(b, "    include "+inc+";")
+			block = append(b, block[nameIdx+1:]...)
+			changed = true
+		}
+		out = append(out, block...)
+		block = nil
+	}
+	for _, l := range lines {
+		t := strings.TrimSpace(l)
+		if depth == 0 && start < 0 && strings.HasPrefix(t, "server") && strings.Contains(t, "{") {
+			start = len(out)
+		}
+		if start >= 0 {
+			block = append(block, l)
+		} else {
+			out = append(out, l)
+		}
+		if !strings.HasPrefix(t, "#") {
+			depth += strings.Count(l, "{") - strings.Count(l, "}")
+		}
+		if start >= 0 && depth == 0 {
+			flush()
+			start = -1
+		}
+	}
+	if block != nil {
+		out = append(out, block...)
+	}
+	return strings.Join(out, "\n"), changed
+}

@@ -127,6 +127,12 @@ func main() {
 	// Manager 的 Nodes/Tunnels 都带锁，restoreState 里读节点列表也走锁，
 	// 所以网页在恢复期间照常能开、能列出已恢复的出口。
 	go func() {
+		// 订阅域名和面板/别的站点同域同端口时，补上订阅片段的 include（否则订阅 404）
+		if nginxInstalled() && ensureSubIncludes() {
+			if err := nginxApply(); err != nil {
+				log.Printf("订阅 include 生效失败: %v", err)
+			}
+		}
 		log.Printf("正在拉取节点列表...")
 		if n, err := mgr.RefreshNodes(); err != nil {
 			log.Printf("拉取失败（可在 Web 界面重试）: %v", err)

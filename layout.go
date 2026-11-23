@@ -279,6 +279,9 @@ func moveToTrash(trashDir, path string) (string, error) {
 		return "", err
 	}
 	dst := filepath.Join(trashDir, filepath.Base(path)+"."+nowStamp())
+	for i := 2; pathExists(dst); i++ {
+		dst = filepath.Join(trashDir, fmt.Sprintf("%s.%s-%d", filepath.Base(path), nowStamp(), i))
+	}
 	if err := os.Rename(path, dst); err != nil {
 		return "", err
 	}

@@ -84,7 +84,7 @@ function renderExits(){
       ? e.rules.map(r => '<button class="chip" data-rule="' + r.id + '" title="分流规则'
           + (r.enabled ? '' : '（已停用）') + '"' + (r.enabled ? '' : ' style="opacity:.5"') + '>'
           + esc(r.name || ('规则 #' + r.id)) + '</button>').join('')
-      : '<span class="chip none">无规则</span>';
+      : '<button class="chip none" data-newrule="' + esc(e.host) + '" title="新建分流规则">无规则</button>';
     const err = e.status === 'failed' && e.err
       ? '<div class="errline" title="' + esc(e.err) + '">' + esc(e.err) + '</div>' : '';
     // country 后端已经给成"国旗 中文"，再拼国家码就重复了
@@ -548,7 +548,7 @@ function syncRuleForm(){
 }
 $('#rall').onchange = syncRuleForm;
 
-function openRule(id){
+function openRule(id, exitHost){
   const r = id ? (view.rules || []).find(x => x.id === Number(id)) : null;
   if(id && !r){ toast('这条规则不在了', true); return; }
   curRule = r;
@@ -592,6 +592,7 @@ function openRule(id){
   $('#rexit').innerHTML = (eopts ? '<optgroup label="fanout 出口">' + eopts + '</optgroup>' : '')
     + (oopts ? '<optgroup label="已有出站">' + oopts + '</optgroup>' : '')
     || '<option value="">还没有出口，先新建出口</option>';
+  if(!r && exitHost) $('#rexit').value = 'exit:' + exitHost;
 
   // 已有规则集：配置目录里别的文件定义的 route.rule_set，直接按 tag 引用
   const lsel = new Set(r ? (r.local_rule_sets || []) : []);
@@ -659,6 +660,8 @@ $('#rsave').onclick = async e => {
 
 document.addEventListener('click', async e => {
   if(e.target.closest('#newrule')){ openRule(0); return; }
+  const nr = e.target.closest('[data-newrule]');
+  if(nr){ closeModal('detail'); openRule(0, nr.dataset.newrule); return; }
   const rsdel = e.target.closest('[data-rsdel]');
   if(rsdel){ rsdel.closest('.rsrow').remove(); return; }
   const ed = e.target.closest('[data-rule]');

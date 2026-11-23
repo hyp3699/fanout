@@ -626,11 +626,17 @@ function renderSubs(){
       + (userLimitText(s.name) ? '<div class="ulim">' + esc(userLimitText(s.name)) + '</div>' : '')
       + '<div class="acts"><button data-sact="copy">复制订阅</button>'
       + '<button data-ulimit="' + esc(s.name) + '">限速/流量</button>'
-      + '<button data-sact="links">看节点</button>'
-      + '<button data-sact="rebuild">重建</button>'
-      + '<span class="spacer"></span>'
-      + '<button class="danger" data-sact="delete">删除</button></div></div>';
+      + '<button data-sact="manage">管理</button></div></div>';
   }).join('');
+}
+
+var smName = '';
+function openSubMgr(name){
+  smName = name;
+  const sub = (subsState.subs || []).find(x => x.name === name) || {};
+  $('#smTitle').textContent = name;
+  $('#smURL').textContent = sub.sub_url || '（订阅地址未生成）';
+  openModal('submgr');
 }
 
 document.addEventListener('click', async e => {
@@ -645,25 +651,43 @@ document.addEventListener('click', async e => {
     if(!sub || !sub.sub_url) return toast('没有订阅地址', true);
     return copy(sub.sub_url);
   }
+  if(act === 'manage') openSubMgr(name);
+});
+
+document.addEventListener('click', async e => {
+  const btn = e.target.closest('[data-smact]');
+  if(!btn || !smName) return;
+  const name = smName;
+  const sub = (subsState.subs || []).find(x => x.name === name);
+  const act = btn.dataset.smact;
   if(act === 'links'){
     $('#logtitle').textContent = '节点链接 · ' + name;
     $('#logtext').value = ((sub && sub.links) || []).join('\n');
     $('#logcopy').onclick = () => copy($('#logtext').value);
     return openModal('logbox');
   }
-  if(act === 'rebuild'){
-    if(!confirmBox('重新把 ' + name + ' 挂回全部入站并重建订阅？UUID 不变，已导入的客户端不用改。')) return;
-    const d = await postJSON('/api/subs/rebuild', {name});
-    if(d.error) return toast(d.error, true);
-    toast('已重建'); loadSubs();
-    return;
-  }
-  if(act === 'delete'){
-    if(!confirmBox('删除用户 ' + name + '？\n会从所有入站里移除，订阅目录和 Nginx 片段一起清掉（挪进回收目录）。')) return;
-    const d = await postJSON('/api/subs/delete', {name});
-    if(d.error) return toast(d.error, true);
-    toast('已删除'); loadSubs(); loadNodes(true);
-  }
+  const ask = {
+    rebuild: '重建 ' + name + '？',
+    uuid: '重置 ' + name + ' 所有入站的 UUID？已导入的客户端要重新拉订阅。',
+    path: '重置 ' + name + ' 的订阅路径？旧订阅地址会失效。',
+    delete: '删除用户 ' + name + '？'
+  }[act];
+  if(!ask || !confirmBox(ask)) return;
+  const all = document.querySelectorAll('#submgr [data-smact]');
+  all.forEach(b => b.disabled = true);
+  let d;
+  try{
+    d = act === 'delete'
+      ? await postJSON('/api/subs/delete', {name})
+      : await postJSON('/api/subs/rebuild', {name, reset: act === 'rebuild' ? '' : act});
+  }catch(err){ d = {error: '请求失败'}; }
+  all.forEach(b => b.disabled = false);
+  if(d.error) return toast(d.error, true);
+  if(act === 'delete'){ closeModal('submgr'); toast('已删除'); loadSubs(); loadNodes(true); return; }
+  toast({rebuild: '已重建', uuid: 'UUID 已重置', path: '订阅路径已重置'}[act]);
+  await loadSubs();
+  if(d.sub && d.sub.sub_url) $('#smURL').textContent = d.sub.sub_url;
+  loadNodes(true);
 });
 
 async function submitSubAdd(){

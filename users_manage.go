@@ -303,6 +303,7 @@ func addSubscriber(req subAddRequest) (*subscriber, error) {
 		return nil, err
 	}
 	writeSubscriberFile(name, newLinks)
+	_ = ensureSubIncludes()
 
 	_ = applySingboxReload()
 	if err := nginxApply(); err != nil {
@@ -575,6 +576,11 @@ func deleteSubscriber(name string, preserveData bool) error {
 
 // rebuildSubscriber 重新把用户挂回全部入站（脚本的「重新添加协议」）。
 func rebuildSubscriber(name string) (*subscriber, error) {
+	return rebuildSubscriberWith(name, false, false)
+}
+
+// rebuildSubscriberWith 重建用户；newUUID 换一个 UUID（所有入站一起换），newPath 换订阅路径。
+func rebuildSubscriberWith(name string, newUUID, newPath bool) (*subscriber, error) {
 	detail, err := subscriberDetail(name)
 	if err != nil {
 		return nil, err
@@ -601,7 +607,14 @@ func rebuildSubscriber(name string) (*subscriber, error) {
 	if err := deleteSubscriber(name, true); err != nil {
 		return nil, err
 	}
-	return addSubscriber(subAddRequest{Name: name, UUID: detail.UUID, Path: detail.Path, Files: files})
+	uuid, path := detail.UUID, detail.Path
+	if newUUID {
+		uuid = newUUIDFresh(uuid)
+	}
+	if newPath {
+		path = ""
+	}
+	return addSubscriber(subAddRequest{Name: name, UUID: uuid, Path: path, Files: files})
 }
 
 // nodeFileForTag 由 tag 找配置文件（tag 与文件名基本一致，socks-N 对应 socks5-N.json）。
@@ -646,4 +659,13 @@ func inboundsOf(doc map[string]any) []map[string]any {
 		}
 	}
 	return out
+}
+
+// newUUIDFresh 生成一个和旧的不一样的 UUID。
+func newUUIDFresh(old string) string {
+	for {
+		if u := newUUID(); u != old {
+			return u
+		}
+	}
 }

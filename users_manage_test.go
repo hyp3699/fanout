@@ -234,3 +234,33 @@ func TestAddSubscriberCreatesSubSiteAndRejectsDuplicate(t *testing.T) {
 		t.Fatalf("重名应该拒绝，实际 %v", err)
 	}
 }
+
+func TestRebuildSubscriberResetUUIDAndPath(t *testing.T) {
+	lp, _ := setupPanel(t)
+	writeTestSubSite(t, lp)
+	writeTestNode(t, lp, "vless-ws-1.json", vlessWSSample)
+	_ = os.WriteFile(filepath.Join(lp.URLDir, "vless-ws-1.txt"),
+		[]byte("vless://aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee@203.0.113.9:23457?security=tls&type=ws#x\n"), 0644)
+	a, err := addSubscriber(subAddRequest{Name: "carol", Files: []string{"vless-ws-1.json"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := rebuildSubscriberWith("carol", true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.UUID == a.UUID || b.Path != a.Path {
+		t.Fatalf("重置 UUID 应换 UUID、保留路径: %+v → %+v", a, b)
+	}
+	blob, _ := os.ReadFile(filepath.Join(lp.ConfDir, "vless-ws-1.json"))
+	if !strings.Contains(string(blob), b.UUID) || strings.Contains(string(blob), a.UUID) {
+		t.Fatal("入站里的 UUID 没换")
+	}
+	c, err := rebuildSubscriberWith("carol", false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Path == b.Path || c.UUID != b.UUID {
+		t.Fatalf("重置路径应换路径、保留 UUID: %+v → %+v", b, c)
+	}
+}
